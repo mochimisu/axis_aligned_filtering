@@ -24,10 +24,10 @@ if(GLUT_FOUND AND OPENGL_FOUND)
   add_definitions(-DGLUT_FOUND -DGLUT_NO_LIB_PRAGMA)
 
   # See top level CMakeLists.txt file for documentation of OPTIX_add_sample_executable.
-  OPTIX_add_sample_executable( arealight
-    arealight.cpp
-    arealight.h
-    arealight.cu
+  OPTIX_add_sample_executable( filtergi
+    filtergi.cpp
+    filtergi.h
+    filtergi.cu
 
     # These files are common among multiple samples
     box.cu
