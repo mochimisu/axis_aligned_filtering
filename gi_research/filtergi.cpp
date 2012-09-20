@@ -150,7 +150,7 @@ void FilterGI::initScene( InitialCameraData& camera_data )
 
   // context 
   m_context->setRayTypeCount( 2 );
-  m_context->setEntryPointCount( 6 );
+  m_context->setEntryPointCount( 4 );
   m_context->setStackSize( 8000 );
 
   m_context["max_depth"]->setInt(100);
@@ -277,48 +277,11 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   Buffer zmin = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height );
   m_context["zmin"]->set( zmin );
 
-
-  Buffer filter_n = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_INT, _width, _height );
-  m_context["use_filter_n"]->set( filter_n );
-
-  Buffer filter_occ = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_INT, _width, _height );
-  m_context["use_filter_occ"]->set( filter_occ );
-
-  Buffer filter_occ_filter1d = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_INT, _width, _height );
-  m_context["use_filter_occ_filter1d"]->set( filter_occ_filter1d );
-
-  Buffer s1s2_blur1d = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT2, _width, _height );
-  m_context["slope_filter1d"]->set( s1s2_blur1d );
-
-  Buffer spp_blur1d = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height );
-  m_context["spp_filter1d"]->set( spp_blur1d );
-
-  Buffer dist_to_light = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height );
-  m_context["dist_to_light"]->set( dist_to_light );
-
-  Buffer proj_d = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height );
-  m_context["proj_d"]->set( proj_d );
-
-  Buffer obj_id = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_INT, _width, _height );
-  m_context["obj_id_b"]->set( obj_id );
-
   _blur_occ = 1;
   m_context["blur_occ"]->setUint(_blur_occ);
 
-  _blur_wxf = 0;
-  m_context["blur_wxf"]->setUint(_blur_wxf);
-
-  _err_vis = 1;
-  m_context["err_vis"]->setUint(_err_vis);
-
   _view_mode = 0;
   m_context["view_mode"]->setUint(_view_mode);
-
-  _show_brdf = 1;
-  m_context["show_brdf"]->setUint(_show_brdf);
-
-  _show_occ = 1;
-  m_context["show_occ"]->setUint(_show_occ);
 
 
   _normal_rpp = 3;
@@ -330,17 +293,9 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   m_context["brute_rpp"]->setUint(_brute_rpp);
   m_context["max_rpp_pass"]->setUint(_max_rpp_pass);
 
-  m_context["spp_mu"]->setFloat(spp_mu);
-
-  _zmin_rpp_scale = 1;
-  m_context["zmin_rpp_scale"]->setFloat(_zmin_rpp_scale);
-
   _pixel_radius = make_int2(10,10);
   m_context["pixel_radius"]->setInt(_pixel_radius);
-
-  _pixel_radius_wxf = make_int2(5,5);
-  m_context["pixel_radius_wxf"]->setInt(_pixel_radius_wxf);
-
+  
   // Sampling program
   std::string camera_name;
   camera_name = "pinhole_camera_initial_sample";
@@ -357,17 +312,6 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   Program second_indirect_filter_program = m_context->createProgramFromPTXFile( _ptx_path, 
     second_pass_indirect_filter_name );
   m_context->setRayGenerationProgram( 3, second_indirect_filter_program );
-
-  // S1, S2 Filter programs
-  std::string first_pass_s1s2_filter_name = "s1s2_filter_first_pass";
-  Program first_s1s2_filter_program = m_context->createProgramFromPTXFile( _ptx_path, 
-    first_pass_s1s2_filter_name );
-  m_context->setRayGenerationProgram( 4, first_s1s2_filter_program );
-  std::string second_pass_s1s2_filter_name = "s1s2_filter_second_pass";
-  Program second_s1s2_filter_program = m_context->createProgramFromPTXFile( _ptx_path, 
-    second_pass_s1s2_filter_name );
-  m_context->setRayGenerationProgram( 5, second_s1s2_filter_program );
-
 
   // Display program
   std::string display_name;
