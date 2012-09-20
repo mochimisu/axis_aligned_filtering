@@ -46,6 +46,21 @@ public:
   void   setDimensions( const unsigned int w, const unsigned int h ) { _width = w; _height = h; }
   Buffer getOutputBuffer();
 
+  GeometryInstance createParallelogram( const float3& anchor,
+                                        const float3& offset1,
+                                        const float3& offset2);
+
+  GeometryInstance createLightParallelogram( const float3& anchor,
+      const float3& offset1,
+      const float3& offset2,
+      int lgt_instance = -1);
+  void setMaterial( GeometryInstance& gi,
+      Material material,
+      const std::string& color_name,
+      const float3& color);
+
+
+
   virtual bool   keyPressed(unsigned char key, int x, int y);
 
 private:
@@ -54,6 +69,8 @@ private:
   void createGeometry();
 
   bool _accel_cache_loaded;
+  Program        m_pgram_bounding_box;
+  Program        m_pgram_intersection;
 
   unsigned int  _frame_number;
   unsigned int  _keep_trying;
@@ -133,12 +150,12 @@ void FilterGI::initScene( InitialCameraData& camera_data )
 
   // context 
   m_context->setRayTypeCount( 2 );
-  m_context->setEntryPointCount( 7 );
+  m_context->setEntryPointCount( 6 );
   m_context->setStackSize( 8000 );
 
   m_context["max_depth"]->setInt(100);
   m_context["radiance_ray_type"]->setUint(0);
-  m_context["shadow_ray_type"]->setUint(1);
+  m_context["indirect_ray_type"]->setUint(1);
   m_context["frame_number"]->setUint( 0u );
   m_context["scene_epsilon"]->setFloat( 1.e-3f );
   m_context["importance_cutoff"]->setFloat( 0.01f );
@@ -156,6 +173,23 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   for(unsigned int i = 0; i < _width * _height; ++i )
     seeds[i] = random2u();
   shadow_rng_seeds->unmap();
+
+
+  // new gi stuff
+  Buffer direct_illum = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
+  m_context["direct_illum"]->set(direct_illum);
+
+  Buffer indirect_illum = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
+  m_context["indirect_illum"]->set(indirect_illum);
+
+  Buffer indirect_illum_blur1d = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
+  m_context["indirect_illum_blur1d"]->set(indirect_illum_blur1d);
+
+  Buffer indirect_illum_filt = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
+  m_context["indirect_illum_filt"]->set(indirect_illum_filt);
+
+  Buffer zpmin = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height);
+  m_context["z_perp_min"]->set(zpmin);
 
   // BRDF buffer
 #ifdef SPP_STATS
@@ -234,6 +268,16 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   Buffer n = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height );
   m_context["n"]->set( n );
 
+  Buffer direct_l = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height );
+  m_context["direct_l"]->set( direct_l );
+
+  Buffer indirect_l = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height );
+  m_context["indirect_l"]->set( indirect_l );
+
+  Buffer zmin = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height );
+  m_context["zmin"]->set( zmin );
+
+
   Buffer filter_n = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_INT, _width, _height );
   m_context["use_filter_n"]->set( filter_n );
 
@@ -304,21 +348,15 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   Program ray_gen_program = m_context->createProgramFromPTXFile( _ptx_path, camera_name );
   m_context->setRayGenerationProgram( 0, ray_gen_program );
 
-  // continual Sampling
-  std::string continue_sampling = "pinhole_camera_continue_sample";
-
-  Program continue_sampling_program = m_context->createProgramFromPTXFile( _ptx_path, continue_sampling );
-  m_context->setRayGenerationProgram( 6, continue_sampling_program );
-
   // Occlusion Filter programs
-  std::string first_pass_occ_filter_name = "occlusion_filter_first_pass";
-  Program first_occ_filter_program = m_context->createProgramFromPTXFile( _ptx_path, 
-    first_pass_occ_filter_name );
-  m_context->setRayGenerationProgram( 2, first_occ_filter_program );
-  std::string second_pass_occ_filter_name = "occlusion_filter_second_pass";
-  Program second_occ_filter_program = m_context->createProgramFromPTXFile( _ptx_path, 
-    second_pass_occ_filter_name );
-  m_context->setRayGenerationProgram( 3, second_occ_filter_program );
+  std::string first_pass_indirect_filter_name = "indirect_filter_first_pass";
+  Program first_indirect_filter_program = m_context->createProgramFromPTXFile( _ptx_path, 
+    first_pass_indirect_filter_name );
+  m_context->setRayGenerationProgram( 2, first_indirect_filter_program );
+  std::string second_pass_indirect_filter_name = "indirect_filter_second_pass";
+  Program second_indirect_filter_program = m_context->createProgramFromPTXFile( _ptx_path, 
+    second_pass_indirect_filter_name );
+  m_context->setRayGenerationProgram( 3, second_indirect_filter_program );
 
   // S1, S2 Filter programs
   std::string first_pass_s1s2_filter_name = "s1s2_filter_first_pass";
@@ -356,7 +394,7 @@ void FilterGI::initScene( InitialCameraData& camera_data )
 //#if SCENE==1
   // grids2
 
-  float3 pos = make_float3(-4.5, 16, 8);
+  //float3 pos = make_float3(-4.5, 16, 8);
   float3 pos1 = make_float3(1.5, 16, 8);
   float3 pos2 = make_float3(-4.5, 21.8284, 3.8284);
   /*
@@ -364,10 +402,12 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   float3 pos1 = make_float3(3.5, 16, 8);
   float3 pos2 = make_float3(-4.5, 17, 7);
   */
-  float3 axis1 = pos1-pos;
-  float3 axis2 = pos2-pos;
+  //float3 axis1 = pos1-pos;
+  //float3 axis2 = pos2-pos;
 
-  float3 norm = cross(axis1,axis2);
+  //float3 norm = cross(axis1,axis2);
+  //float3 pos = make_float3(0, 1, -1);
+  float3 pos   = make_float3( 343.0f, 548.6f, 227.0f);
 
   BasicLight lights[] = {
     { pos,
@@ -386,8 +426,8 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   };
   */
 
-  float3 normed_norm = normalize(norm);
-  m_context["lightnorm"]->setFloat(normed_norm);
+  //float3 normed_norm = normalize(norm);
+  //m_context["lightnorm"]->setFloat(normed_norm);
 
   _env_lights = lights;
   light_buffer = m_context->createBuffer(RT_BUFFER_INPUT);
@@ -401,12 +441,18 @@ void FilterGI::initScene( InitialCameraData& camera_data )
 
 
   // Set up camera
+  /*
   camera_data = InitialCameraData( make_float3( -4.5f, 2.5f, 5.5f ), // eye
     //camera_data = InitialCameraData( make_float3( -5.1f, 2.1f, -3.1f ), // eye
     make_float3( 0.0f, 0.5f,  0.0f ), // lookat
     //make_float3( -4.0f, 0.0f,  -2.0f ), // looka
     make_float3( 0.0f, 1.0f,  0.0f ), // up
     60 );                             // vfov
+*/
+    camera_data = InitialCameraData( make_float3( 278.0f, 273.0f, -800.0f ), // eye
+                                     make_float3( 278.0f, 273.0f, 0.0f ),    // lookat
+                                     make_float3( 0.0f, 1.0f,  0.0f ),       // up
+                                     35.0f );                                // vfov
 
   m_context["eye"]->setFloat( make_float3( 0.0f, 0.0f, 0.0f ) );
   m_context["U"]->setFloat( make_float3( 0.0f, 0.0f, 0.0f ) );
@@ -548,23 +594,23 @@ light_buffer->unmap();
   //Initial 16 Samples
   m_context->launch( 0, static_cast<unsigned int>(buffer_width),
     static_cast<unsigned int>(buffer_height) );
+  //filter indirect
+  m_context->launch( 2, static_cast<unsigned int>(buffer_width),
+    static_cast<unsigned int>(buffer_height) );
+  m_context->launch( 3, static_cast<unsigned int>(buffer_width),
+    static_cast<unsigned int>(buffer_height) );
+  /*
   //Filter s1,s2
   m_context->launch( 4, static_cast<unsigned int>(buffer_width),
     static_cast<unsigned int>(buffer_height) );
   m_context->launch( 5, static_cast<unsigned int>(buffer_width),
-    static_cast<unsigned int>(buffer_height) );
-  //Resample
-#if 0
-  num_resample = 20;
-  for(int i = 0; i < num_resample; i++)
-#endif
-    m_context->launch( 6, static_cast<unsigned int>(buffer_width),
     static_cast<unsigned int>(buffer_height) );
   //Filter occlusion
   m_context->launch( 2, static_cast<unsigned int>(buffer_width),
     static_cast<unsigned int>(buffer_height) );
   m_context->launch( 3, static_cast<unsigned int>(buffer_width),
     static_cast<unsigned int>(buffer_height) );
+    */
   //Display
  
   /*
@@ -707,6 +753,12 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
       float3 d = make_float3(delta,0,0);
       BasicLight* lights = reinterpret_cast<BasicLight*>(light_buffer->map());
       lights[0].pos += d;
+
+      std::cout << "light now at (" 
+        << "," << lights[0].pos.x 
+        << "," << lights[0].pos.y 
+        << "," << lights[0].pos.z
+        << ")" << std::endl;
       light_buffer->unmap();
 
       m_camera_changed = true;
@@ -718,6 +770,12 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
       float3 d = make_float3(delta,0,0);
       BasicLight* lights = reinterpret_cast<BasicLight*>(light_buffer->map());
       lights[0].pos -= d;
+
+      std::cout << "light now at (" 
+        << "," << lights[0].pos.x 
+        << "," << lights[0].pos.y 
+        << "," << lights[0].pos.z
+        << ")" << std::endl;
 
       light_buffer->unmap();
 
@@ -731,6 +789,12 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
       BasicLight* lights = reinterpret_cast<BasicLight*>(light_buffer->map());
       lights[0].pos += d;
 
+      std::cout << "light now at (" 
+        << "," << lights[0].pos.x 
+        << "," << lights[0].pos.y 
+        << "," << lights[0].pos.z
+        << ")" << std::endl;
+
       light_buffer->unmap();
 
       m_camera_changed = true;
@@ -742,6 +806,12 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
       float3 d = make_float3(0,delta,0);
       BasicLight* lights = reinterpret_cast<BasicLight*>(light_buffer->map());
       lights[0].pos -= d;
+
+      std::cout << "light now at (" 
+        << "," << lights[0].pos.x 
+        << "," << lights[0].pos.y 
+        << "," << lights[0].pos.z
+        << ")" << std::endl;
 
       light_buffer->unmap();
 
@@ -755,6 +825,12 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
       float3 d = make_float3(0,0,delta);
       BasicLight* lights = reinterpret_cast<BasicLight*>(light_buffer->map());
       lights[0].pos += d;
+
+      std::cout << "light now at (" 
+        << "," << lights[0].pos.x 
+        << "," << lights[0].pos.y 
+        << "," << lights[0].pos.z
+        << ")" << std::endl;
       light_buffer->unmap();
 
       m_camera_changed = true;
@@ -766,6 +842,12 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
       float3 d = make_float3(0,0,delta);
       BasicLight* lights = reinterpret_cast<BasicLight*>(light_buffer->map());
       lights[0].pos -= d;
+
+      std::cout << "light now at (" 
+        << "," << lights[0].pos.x 
+        << "," << lights[0].pos.y 
+        << "," << lights[0].pos.z
+        << ")" << std::endl;
 
       light_buffer->unmap();
 
@@ -1038,14 +1120,210 @@ void appendGeomGroup(GeometryGroup& target, GeometryGroup& source)
     target->setChild(ct_target + i, source->getChild(i));
 }
 
+GeometryInstance FilterGI::createParallelogram( const float3& anchor,
+    const float3& offset1,
+    const float3& offset2)
+{
+  Geometry parallelogram = m_context->createGeometry();
+  parallelogram->setPrimitiveCount( 1u );
+  parallelogram->setIntersectionProgram( m_pgram_intersection );
+  parallelogram->setBoundingBoxProgram( m_pgram_bounding_box );
+
+  float3 normal = normalize( cross( offset1, offset2 ) );
+  float d = dot( normal, anchor );
+  float4 plane = make_float4( normal, d );
+
+  float3 v1 = offset1 / dot( offset1, offset1 );
+  float3 v2 = offset2 / dot( offset2, offset2 );
+
+  parallelogram["plane"]->setFloat( plane );
+  parallelogram["anchor"]->setFloat( anchor );
+  parallelogram["v1"]->setFloat( v1 );
+  parallelogram["v2"]->setFloat( v2 );
+
+  GeometryInstance gi = m_context->createGeometryInstance();
+  gi->setGeometry(parallelogram);
+  return gi;
+}
+GeometryInstance FilterGI::createLightParallelogram( const float3& anchor,
+    const float3& offset1,
+    const float3& offset2,
+    int lgt_instance)
+{
+  Geometry parallelogram = m_context->createGeometry();
+  parallelogram->setPrimitiveCount( 1u );
+  parallelogram->setIntersectionProgram( m_pgram_intersection );
+  parallelogram->setBoundingBoxProgram( m_pgram_bounding_box );
+
+  float3 normal = normalize( cross( offset1, offset2 ) );
+  float d = dot( normal, anchor );
+  float4 plane = make_float4( normal, d );
+
+  float3 v1 = offset1 / dot( offset1, offset1 );
+  float3 v2 = offset2 / dot( offset2, offset2 );
+
+  parallelogram["plane"]->setFloat( plane );
+  parallelogram["anchor"]->setFloat( anchor );
+  parallelogram["v1"]->setFloat( v1 );
+  parallelogram["v2"]->setFloat( v2 );
+  parallelogram["lgt_instance"]->setInt( lgt_instance );
+
+  GeometryInstance gi = m_context->createGeometryInstance();
+  gi->setGeometry(parallelogram);
+  return gi;
+}
+
+void FilterGI::setMaterial( GeometryInstance& gi,
+    Material material,
+    const std::string& color_name,
+    const float3& color)
+{
+  gi->addMaterial(material);
+  gi[color_name]->setFloat(color);
+}
+
 //#if SCENE==1
 //grids2
 void FilterGI::createGeometry()
 {
   //Intersection programs
   Program closest_hit = m_context->createProgramFromPTXFile(_ptx_path, "closest_hit_radiance3");
-  Program any_hit = m_context->createProgramFromPTXFile(_ptx_path, "any_hit_shadow");
+  Program any_hit = m_context->createProgramFromPTXFile(_ptx_path, "any_hit_indirect");
 
+  Program diffuse_ch = closest_hit;
+  Program diffuse_ah = any_hit;
+
+  // Light buffer
+  BasicLight light;
+  light.pos   = make_float3( 343.0f, 548.6f, 227.0f);
+  //light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
+  //light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
+  //light.normal   = normalize( cross(light.v1, light.v2) );
+  //light.emission = make_float3( 15.0f, 15.0f, 5.0f );
+
+  Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
+  light_buffer->setFormat( RT_FORMAT_USER );
+  light_buffer->setElementSize( sizeof( BasicLight ) );
+  light_buffer->setSize( 1u );
+  memcpy( light_buffer->map(), &light, sizeof( light ) );
+  light_buffer->unmap();
+  m_context["lights"]->setBuffer( light_buffer );
+  // Set up material
+  Material diffuse = m_context->createMaterial();
+  //Program diffuse_ch = m_context->createProgramFromPTXFile( ptxpath( "path_tracer", "path_tracer.cu" ), "diffuse" );
+  //Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "path_tracer", "path_tracer.cu" ), "shadow" );
+  diffuse->setClosestHitProgram( 0, diffuse_ch );
+  diffuse->setAnyHitProgram( 1, diffuse_ah );
+
+  //Material diffuse_light = m_context->createMaterial();
+  //Program diffuse_em = m_context->createProgramFromPTXFile( ptxpath( "path_tracer", "path_tracer.cu" ), "diffuseEmitter" );
+  //diffuse_light->setClosestHitProgram( 0, diffuse_em );
+
+  // Set up parallelogram programs
+  std::string ptx_path = ptxpath( "filtergi", "parallelogram.cu" );
+  m_pgram_bounding_box = m_context->createProgramFromPTXFile( ptx_path, "bounds" );
+  m_pgram_intersection = m_context->createProgramFromPTXFile( ptx_path, "intersect" );
+
+  // create geometry instances
+  std::vector<GeometryInstance> gis;
+
+  const float3 white = make_float3( 0.8f, 0.8f, 0.8f );
+  const float3 green = make_float3( 0.05f, 0.8f, 0.05f );
+  const float3 red   = make_float3( 0.8f, 0.05f, 0.05f );
+  const float3 light_em = make_float3( 15.0f, 15.0f, 5.0f );
+
+  // Floor
+  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ),
+                                      make_float3( 556.0f, 0.0f, 0.0f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Ceiling
+  gis.push_back( createParallelogram( make_float3( 0.0f, 548.8f, 0.0f ),
+                                      make_float3( 556.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Back wall
+  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 559.2f),
+                                      make_float3( 0.0f, 548.8f, 0.0f),
+                                      make_float3( 556.0f, 0.0f, 0.0f) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Right wall
+  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 548.8f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", green);
+
+  // Left wall
+  gis.push_back( createParallelogram( make_float3( 556.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ),
+                                      make_float3( 0.0f, 548.8f, 0.0f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", red);
+
+  // Short block
+  gis.push_back( createParallelogram( make_float3( 130.0f, 165.0f, 65.0f),
+                                      make_float3( -48.0f, 0.0f, 160.0f),
+                                      make_float3( 160.0f, 0.0f, 49.0f) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+  gis.push_back( createParallelogram( make_float3( 290.0f, 0.0f, 114.0f),
+                                      make_float3( 0.0f, 165.0f, 0.0f),
+                                      make_float3( -50.0f, 0.0f, 158.0f) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+  gis.push_back( createParallelogram( make_float3( 130.0f, 0.0f, 65.0f),
+                                      make_float3( 0.0f, 165.0f, 0.0f),
+                                      make_float3( 160.0f, 0.0f, 49.0f) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+  gis.push_back( createParallelogram( make_float3( 82.0f, 0.0f, 225.0f),
+                                      make_float3( 0.0f, 165.0f, 0.0f),
+                                      make_float3( 48.0f, 0.0f, -160.0f) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+  gis.push_back( createParallelogram( make_float3( 240.0f, 0.0f, 272.0f),
+                                      make_float3( 0.0f, 165.0f, 0.0f),
+                                      make_float3( -158.0f, 0.0f, -47.0f) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Tall block
+  gis.push_back( createParallelogram( make_float3( 423.0f, 330.0f, 247.0f),
+                                      make_float3( -158.0f, 0.0f, 49.0f),
+                                      make_float3( 49.0f, 0.0f, 159.0f) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+  gis.push_back( createParallelogram( make_float3( 423.0f, 0.0f, 247.0f),
+                                      make_float3( 0.0f, 330.0f, 0.0f),
+                                      make_float3( 49.0f, 0.0f, 159.0f) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+  gis.push_back( createParallelogram( make_float3( 472.0f, 0.0f, 406.0f),
+                                      make_float3( 0.0f, 330.0f, 0.0f),
+                                      make_float3( -158.0f, 0.0f, 50.0f) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+  gis.push_back( createParallelogram( make_float3( 314.0f, 0.0f, 456.0f),
+                                      make_float3( 0.0f, 330.0f, 0.0f),
+                                      make_float3( -49.0f, 0.0f, -160.0f) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+  gis.push_back( createParallelogram( make_float3( 265.0f, 0.0f, 296.0f),
+                                      make_float3( 0.0f, 330.0f, 0.0f),
+                                      make_float3( 158.0f, 0.0f, -49.0f) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Create shadow group (no light)
+  GeometryGroup shadow_group = m_context->createGeometryGroup(gis.begin(), gis.end());
+  shadow_group->setAcceleration( m_context->createAcceleration("Bvh","Bvh") );
+  m_context["top_shadower"]->set( shadow_group );
+
+  // Light
+  //gis.push_back( createParallelogram( make_float3( 343.0f, 548.6f, 227.0f),
+  //                                    make_float3( -130.0f, 0.0f, 0.0f),
+  //                                    make_float3( 0.0f, 0.0f, 105.0f) ) );
+  //setMaterial(gis.back(), diffuse_light, "emission_color", light_em);
+
+  // Create geometry group
+  GeometryGroup geometry_group = m_context->createGeometryGroup(gis.begin(), gis.end());
+  geometry_group->setAcceleration( m_context->createAcceleration("Bvh","Bvh") );
+  m_context["top_object"]->set( geometry_group );
+
+
+  /*
   //Make some temp geomgroups
   _top_grp = m_context->createGroup();
   GeometryGroup floor_geom_group = m_context->createGeometryGroup();
@@ -1242,6 +1520,8 @@ void FilterGI::createGeometry()
   //Set the geom group
   m_context["top_object"]->set( _top_grp );
   m_context["top_shadower"]->set( _top_grp );
+
+  */
 
   //m_context["top_object"]->set( grid2_geom_group );
   //m_context["top_shadower"]->set( grid2_geom_group );
