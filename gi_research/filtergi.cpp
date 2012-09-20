@@ -90,7 +90,7 @@ private:
   float _env_theta;
   float _env_phi;
 
-  uint _blur_occ;
+  uint _filter_indirect;
   uint _blur_wxf;
   uint _err_vis;
   uint _view_mode;
@@ -167,12 +167,12 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   //seed rng
   //(i have no idea if this is right)
   //fix size later
-  Buffer shadow_rng_seeds = m_context->createBuffer(RT_BUFFER_INPUT, RT_FORMAT_UNSIGNED_INT2, _width, _height);
-  m_context["shadow_rng_seeds"]->set(shadow_rng_seeds);
-  uint2* seeds = reinterpret_cast<uint2*>( shadow_rng_seeds->map() );
+  Buffer indirect_rng_seeds = m_context->createBuffer(RT_BUFFER_INPUT, RT_FORMAT_UNSIGNED_INT2, _width, _height);
+  m_context["indirect_rng_seeds"]->set(indirect_rng_seeds);
+  uint2* seeds = reinterpret_cast<uint2*>( indirect_rng_seeds->map() );
   for(unsigned int i = 0; i < _width * _height; ++i )
     seeds[i] = random2u();
-  shadow_rng_seeds->unmap();
+  indirect_rng_seeds->unmap();
 
 
   // new gi stuff
@@ -277,8 +277,8 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   Buffer zmin = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height );
   m_context["zmin"]->set( zmin );
 
-  _blur_occ = 1;
-  m_context["blur_occ"]->setUint(_blur_occ);
+  _filter_indirect = 1;
+  m_context["filter_indirect"]->setUint(_filter_indirect);
 
   _view_mode = 0;
   m_context["view_mode"]->setUint(_view_mode);
@@ -521,11 +521,11 @@ light_buffer->unmap();
 #endif
 
   // do i need to reseed?
-  Buffer shadow_rng_seeds = m_context["shadow_rng_seeds"]->getBuffer();
-  uint2* seeds = reinterpret_cast<uint2*>( shadow_rng_seeds->map() );
+  Buffer indirect_rng_seeds = m_context["indirect_rng_seeds"]->getBuffer();
+  uint2* seeds = reinterpret_cast<uint2*>( indirect_rng_seeds->map() );
   for(unsigned int i = 0; i < _width * _height; ++i )
     seeds[i] = random2u();
-  shadow_rng_seeds->unmap();
+  indirect_rng_seeds->unmap();
 
   Buffer buffer = m_context["output_buffer"]->getBuffer();
   RTsize buffer_width, buffer_height;
@@ -927,9 +927,9 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
     return true;
   case 'B':
   case 'b':
-    _blur_occ = 1-_blur_occ;
-    m_context["blur_occ"]->setUint(_blur_occ);
-    if (_blur_occ)
+    _filter_indirect = 1-_filter_indirect;
+    m_context["filter_indirect"]->setUint(_filter_indirect);
+    if (_filter_indirect)
       std::cout << "Blur: On" << std::endl;
     else
       std::cout << "Blur: Off" << std::endl;
@@ -955,32 +955,20 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
     return true;
   case 'Z':
   case 'z':
-    _view_mode = (_view_mode+1)%9;
+    _view_mode = (_view_mode+1)%4;
     m_context["view_mode"]->setUint(_view_mode);
     switch(_view_mode) {
     case 0:
       std::cout << "View mode: Normal" << std::endl;
       break;
     case 1:
-      std::cout << "View mode: Occlusion Only" << std::endl;
+      std::cout << "View mode: Direct Only" << std::endl;
       break;
     case 2:
-      std::cout << "View mode: Scale" << std::endl;
+      std::cout << "View mode: Indirect only" << std::endl;
       break;
     case 3:
-      std::cout << "View mode: Current SPP" << std::endl;
-      break;
-    case 4:
-      std::cout << "View mode: Theoretical SPP" << std::endl;
-      break;
-    case 5:
-      std::cout << "Use filter (normals)" << std::endl;
-      break;
-    case 6:
-      std::cout << "Use filter (unoccluded)" << std::endl;
-      break;
-    case 7:
-      std::cout << "View unconverged pixels" << std::endl;
+      std::cout << "View mode: Z Perpendicular (min)" << std::endl;
       break;
     default:
       std::cout << "View mode: Unknown" << std::endl;
@@ -1131,7 +1119,7 @@ void FilterGI::setMaterial( GeometryInstance& gi,
 void FilterGI::createGeometry()
 {
   //Intersection programs
-  Program closest_hit = m_context->createProgramFromPTXFile(_ptx_path, "closest_hit_radiance3");
+  Program closest_hit = m_context->createProgramFromPTXFile(_ptx_path, "closest_hit_radiance");
   Program any_hit = m_context->createProgramFromPTXFile(_ptx_path, "any_hit_indirect");
 
   Program diffuse_ch = closest_hit;

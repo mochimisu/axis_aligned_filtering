@@ -152,7 +152,7 @@ rtBuffer<float, 2>                spp_cur;
 rtBuffer<BasicLight>        lights;
 
 rtDeclareVariable(uint,           frame, , );
-rtDeclareVariable(uint,           blur_occ, , );
+rtDeclareVariable(uint,           filter_indirect, , );
 rtDeclareVariable(uint,           blur_wxf, , );
 rtDeclareVariable(uint,           err_vis, , );
 rtDeclareVariable(uint,           view_mode, , );
@@ -210,7 +210,7 @@ RT_PROGRAM void display_camera() {
   }
 
   output_buffer[launch_index] = make_color( direct_illum[launch_index]+indirect_illum[launch_index]);
-  if (blur_occ)
+  if (filter_indirect)
     output_buffer[launch_index] = make_color( direct_illum[launch_index]+indirect_illum_filt[launch_index]);
 
   if (view_mode) {
@@ -218,7 +218,7 @@ RT_PROGRAM void display_camera() {
       output_buffer[launch_index] = make_color( direct_illum[launch_index] );
     if (view_mode == 2) 
     {
-      if (blur_occ)
+      if (filter_indirect)
         output_buffer[launch_index] = make_color( indirect_illum_filt[launch_index]);
       else
         output_buffer[launch_index] = make_color( indirect_illum[launch_index]);
@@ -374,10 +374,10 @@ RT_PROGRAM void any_hit_indirect()
 }
 
 //Random direction buffer
-rtBuffer<uint2, 2> shadow_rng_seeds;
+rtBuffer<uint2, 2> indirect_rng_seeds;
 
 //Rays from camera
-RT_PROGRAM void closest_hit_radiance3()
+RT_PROGRAM void closest_hit_radiance()
 {
   float3 world_geo_normal   = normalize( rtTransformNormal( RT_OBJECT_TO_WORLD, geometric_normal ) );
   float3 world_shade_normal = normalize( rtTransformNormal( RT_OBJECT_TO_WORLD, shading_normal ) );
@@ -390,7 +390,7 @@ RT_PROGRAM void closest_hit_radiance3()
   prd_radiance.hit = true;
   prd_radiance.n = ffnormal;
 
-  uint2 seed = shadow_rng_seeds[launch_index];
+  uint2 seed = indirect_rng_seeds[launch_index];
 
 
   //Assume 1 light for now
@@ -418,10 +418,14 @@ RT_PROGRAM void closest_hit_radiance3()
   createONB(ffnormal, u,v,w);
   float3 indirectColor = make_float3(0,0,0);
   float z_perp_min = 100000000;
+  float2 sample = make_float2(0);
+  //stratify
   for(int i=0; i<sample_sqrt; ++i) {
     seed.x = rot_seed(seed.x, i);
+    sample.x = (sample.x+((float)i))/sample_sqrt;
     for(int j=0; j<sample_sqrt; ++j) {
       seed.y = rot_seed(seed.y, j);
+      sample.y = (sample.y+((float)j))/sample_sqrt;
       float2 sample = make_float2( rnd(seed.x), rnd(seed.y) );
       sampleUnitHemisphere( sample, u,v,w, sampleDir);
 
@@ -455,64 +459,7 @@ RT_PROGRAM void closest_hit_radiance3()
   prd_radiance.indirect = indirectColor;
   prd_radiance.zpmin = z_perp_min;
 
-
-  /*
-  //Stratify x
-  for(int i=0; i<prd_radiance.sqrt_num_samples; ++i) {
-    seed.x = rot_seed(seed.x, i);
-
-    //Stratify y
-    for(int j=0; j<prd_radiance.sqrt_num_samples; ++j) {
-      seed.y = rot_seed(seed.y, j);
-
-      float2 sample = make_float2( rnd(seed.x), rnd(seed.y) );
-      sample.x = (sample.x+((float)i))/prd_radiance.sqrt_num_samples;
-      sample.y = (sample.y+((float)j))/prd_radiance.sqrt_num_samples;
-
-      float3 target = (sample.x * lx + sample.y * ly) + lo;
-
-      float strength = exp( -0.5 * ((light.pos.x - target.x) * (light.pos.x - target.x) \
-        + (light.pos.y - target.y) * (light.pos.y - target.y) \
-        + (light.pos.z - target.z) * (light.pos.z - target.z)) \
-        / ( light_sigma * light_sigma));
-
-      float3 sampleDir = normalize(target - hit_point);
-
-      if(dot(ffnormal, sampleDir) > 0.0f) {
-        prd_radiance.use_filter_n = true;
-        prd_radiance.vis_weight_tot += strength;
-
-        // SHADOW
-        //cast ray and check for shadow
-        PerRayData_shadow shadow_prd;
-        shadow_prd.attenuation = make_float3(strength);
-        shadow_prd.distance_max = 0;
-        shadow_prd.distance_min = dist_to_light;
-        shadow_prd.hit = false;
-        optix::Ray shadow_ray ( hit_point, sampleDir, shadow_ray_type, 0.001);//scene_epsilon );
-        rtTrace(top_shadower, shadow_ray, shadow_prd);
-
-        if(shadow_prd.hit) {
-          prd_radiance.hit_shadow = true;
-          float d2min = dist_to_light - shadow_prd.distance_max;
-          float d2max = dist_to_light - shadow_prd.distance_min;
-          if (shadow_prd.distance_max < 0.000000001)
-            d2min = dist_to_light;
-          float s1 = dist_to_light/d2min - 1.0;
-          float s2 = dist_to_light/d2max - 1.0;
-
-          prd_radiance.s1 = max(prd_radiance.s1, s1);
-          prd_radiance.s2 = min(prd_radiance.s2, s2);
-        } else {
-          prd_radiance.unavg_vis += strength;
-        }
-      }
-
-    }
-  }
-
-  shadow_rng_seeds[launch_index] = seed;
-  */
+  indirect_rng_seeds[launch_index] = seed;
 
 }
 
