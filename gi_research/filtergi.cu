@@ -139,6 +139,7 @@ rtBuffer<float3, 2>               indirect_illum;
 rtBuffer<float, 2>                z_perp_min;
 rtBuffer<float3, 2>               indirect_illum_blur1d;
 rtBuffer<float3, 2>               indirect_illum_filt;
+rtBuffer<float4, 2>               indirect_illum_accum;
 
 rtBuffer<float3, 2>               brdf;
 //divided occlusion, undivided occlusion, wxf, num_samples
@@ -181,6 +182,9 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
   float3 ray_origin = eye;
   float3 ray_direction = normalize(d.x*U + d.y*V + W);
   PerRayData_radiance prd;
+
+  if (frame == 0)
+    indirect_illum_accum[launch_index] = make_float4(0);
 
   // Initialize the stuff we use in later passes
   brdf[launch_index] = make_float3(0,0,0);
@@ -240,7 +244,7 @@ __device__ __inline__ void indirectFilter(
     unsigned int pass)
 {
   const float dist_scale_threshold = 10.0f;
-  const float dist_threshold = 1.0f;
+  const float dist_threshold = 100.0f;
   const float angle_threshold = 20.0f * M_PI/180.0f;
 
   if (i > 0 && i < buf_size.x && j > 0 && j < buf_size.y) {
@@ -249,17 +253,27 @@ __device__ __inline__ void indirectFilter(
     if (pass == 1)
       target_indirect = indirect_illum_blur1d[target_index];
     float target_zpmin = z_perp_min[target_index];
+    float3 target_n = n[target_index];
     //bool use_filt = use_filt_indirect[target_index];
     bool use_filt = true;
 
-    float3 target_loc = world_loc[target_index];
-    float3 diff = cur_world_loc - target_loc;
-    float euclidean_distsq = dot(diff,diff);
+    if (use_filt 
+        && acos(dot(target_n, cur_n)) < angle_threshold
+        && (1/target_zpmin - 1/cur_zpmin) < dist_scale_threshold
+        )
+    {
+      float3 target_loc = world_loc[target_index];
+      float3 diff = cur_world_loc - target_loc;
+      float euclidean_distsq = dot(diff,diff);
 
-    float weight = gaussFilter(euclidean_distsq, 1/cur_zpmin);
+      if (euclidean_distsq < (dist_threshold*dist_threshold))
+      {
+        float weight = gaussFilter(euclidean_distsq, 1/cur_zpmin);
 
-    blurred_indirect_sum += weight * target_indirect;
-    sum_weight += weight;
+        blurred_indirect_sum += weight * target_indirect;
+        sum_weight += weight;
+      }
+    }
     
   }
 }
@@ -416,7 +430,8 @@ RT_PROGRAM void closest_hit_radiance()
   float3 u,v,w;
   float3 sampleDir;
   createONB(ffnormal, u,v,w);
-  float3 indirectColor = make_float3(0,0,0);
+  float4 curIndAccum = indirect_illum_accum[launch_index];
+  float3 indirectColor = make_float3(curIndAccum.x, curIndAccum.y, curIndAccum.z);
   float z_perp_min = 100000000;
   float2 sample = make_float2(0);
   //stratify
@@ -436,7 +451,7 @@ RT_PROGRAM void closest_hit_radiance()
       indirect_prd.distance = 100000000;
 
 
-      optix::Ray indirect_ray ( hit_point, sampleDir, indirect_ray_type, 0.01);//scene_epsilon );
+      optix::Ray indirect_ray ( hit_point, sampleDir, indirect_ray_type, 0.001);//scene_epsilon );
 
       rtTrace(top_shadower, indirect_ray, indirect_prd);
 
@@ -454,9 +469,16 @@ RT_PROGRAM void closest_hit_radiance()
     }
   }
 
-  indirectColor /= sample_sqrt*sample_sqrt;
+  float num = indirect_illum_accum[launch_index].w \
+              + (sample_sqrt*sample_sqrt);
 
-  prd_radiance.indirect = indirectColor;
+
+  indirect_illum_accum[launch_index].w = num;
+  indirect_illum_accum[launch_index].x = indirectColor.x;
+  indirect_illum_accum[launch_index].y = indirectColor.y;
+  indirect_illum_accum[launch_index].z = indirectColor.z;
+
+  prd_radiance.indirect = indirectColor/num;
   prd_radiance.zpmin = z_perp_min;
 
   indirect_rng_seeds[launch_index] = seed;

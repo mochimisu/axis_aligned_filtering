@@ -180,6 +180,10 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   m_context["direct_illum"]->set(direct_illum);
 
   Buffer indirect_illum = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
+  
+  Buffer indirect_illum_accum = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT4, _width, _height);
+  m_context["indirect_illum_accum"]->set(indirect_illum_accum);
+
   m_context["indirect_illum"]->set(indirect_illum);
 
   Buffer indirect_illum_blur1d = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
@@ -355,7 +359,7 @@ void FilterGI::initScene( InitialCameraData& camera_data )
 
   BasicLight lights[] = {
     { pos,
-      make_float3(1.f, 1.f, 1.f),
+      make_float3(15.f, 15.f, 5.f),
       1
     }
   };
@@ -955,7 +959,10 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
     return true;
   case 'Z':
   case 'z':
-    _view_mode = (_view_mode+1)%4;
+    if (key == 'Z')
+      _view_mode = (_view_mode-1)%4;
+    else
+      _view_mode = (_view_mode+1)%4;
     m_context["view_mode"]->setUint(_view_mode);
     switch(_view_mode) {
     case 0:
@@ -1544,6 +1551,7 @@ int main( int argc, char** argv )
     _scene->setDimensions( width, height );
     //dont time out progressive
     GLUTDisplay::setProgressiveDrawingTimeout(0.0);
+    //GLUTDisplay::setUseSRGB(true);
     GLUTDisplay::run( title.str(), _scene, GLUTDisplay::CDProgressive ); //GLUTDisplay::CDNone );//GLUTDisplay::CDProgressive );
   } catch( Exception& e ){
     sutilReportError( e.getErrorString().c_str() );
