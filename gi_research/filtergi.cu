@@ -184,7 +184,10 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
   PerRayData_radiance prd;
 
   if (frame == 0)
+  {
     indirect_illum_accum[launch_index] = make_float4(0);
+    z_perp_min[launch_index] = 100000000;
+  }
 
   // Initialize the stuff we use in later passes
   brdf[launch_index] = make_float3(0,0,0);
@@ -192,7 +195,7 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
   optix::Ray ray(ray_origin, ray_direction, radiance_ray_type, scene_epsilon);
   prd.sqrt_num_samples = normal_rpp;
   prd.hit = false;
-  prd.zpmin = 100000000;
+  prd.zpmin = z_perp_min[launch_index];
 
   rtTrace(top_object, ray, prd);
 
@@ -426,13 +429,12 @@ RT_PROGRAM void closest_hit_radiance()
   prd_radiance.direct = color;
 
   //indirect values
-  int sample_sqrt = 4;
+  int sample_sqrt = 2;
   float3 u,v,w;
   float3 sampleDir;
   createONB(ffnormal, u,v,w);
   float4 curIndAccum = indirect_illum_accum[launch_index];
   float3 indirectColor = make_float3(curIndAccum.x, curIndAccum.y, curIndAccum.z);
-  float z_perp_min = 100000000;
   float2 sample = make_float2(0);
   //stratify
   for(int i=0; i<sample_sqrt; ++i) {
@@ -458,7 +460,7 @@ RT_PROGRAM void closest_hit_radiance()
       if(indirect_prd.hit) {
         float3 zvec = indirect_prd.distance*sampleDir;
         float cur_zpmin = sqrt(dot(zvec,zvec) - dot(ffnormal,zvec));
-        z_perp_min = min(z_perp_min, cur_zpmin);
+        prd_radiance.zpmin = min(prd_radiance.zpmin, cur_zpmin);
       }
 
       //nDl term needed if sampling by cosine density?
@@ -479,7 +481,6 @@ RT_PROGRAM void closest_hit_radiance()
   indirect_illum_accum[launch_index].z = indirectColor.z;
 
   prd_radiance.indirect = indirectColor/num;
-  prd_radiance.zpmin = z_perp_min;
 
   indirect_rng_seeds[launch_index] = seed;
 
