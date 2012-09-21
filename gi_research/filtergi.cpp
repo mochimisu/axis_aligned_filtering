@@ -195,6 +195,9 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   Buffer zpmin = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height);
   m_context["z_perp_min"]->set(zpmin);
 
+  Buffer use_filter = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_UNSIGNED_BYTE, _width, _height);
+  m_context["use_filter"]->set(use_filter);
+
   // BRDF buffer
 #ifdef SPP_STATS
   _brdf = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT, RT_FORMAT_FLOAT3, _width, _height );
@@ -960,9 +963,9 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
   case 'Z':
   case 'z':
     if (key == 'Z')
-      _view_mode = (_view_mode-1)%4;
+      _view_mode = (_view_mode-1)%5;
     else
-      _view_mode = (_view_mode+1)%4;
+      _view_mode = (_view_mode+1)%5;
     m_context["view_mode"]->setUint(_view_mode);
     switch(_view_mode) {
     case 0:
@@ -976,6 +979,9 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
       break;
     case 3:
       std::cout << "View mode: Z Perpendicular (min)" << std::endl;
+      break;
+    case 4:
+      std::cout << "View mode: Pixels using filter" << std::endl;
       break;
     default:
       std::cout << "View mode: Unknown" << std::endl;

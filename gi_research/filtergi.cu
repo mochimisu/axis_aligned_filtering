@@ -140,6 +140,7 @@ rtBuffer<float, 2>                z_perp_min;
 rtBuffer<float3, 2>               indirect_illum_blur1d;
 rtBuffer<float3, 2>               indirect_illum_filt;
 rtBuffer<float4, 2>               indirect_illum_accum;
+rtBuffer<char, 2>                 use_filter;
 
 rtBuffer<float3, 2>               brdf;
 //divided occlusion, undivided occlusion, wxf, num_samples
@@ -187,6 +188,7 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
   {
     indirect_illum_accum[launch_index] = make_float4(0);
     z_perp_min[launch_index] = 100000000;
+    use_filter[launch_index] = false;
   }
 
   // Initialize the stuff we use in later passes
@@ -198,6 +200,8 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
   prd.zpmin = z_perp_min[launch_index];
 
   rtTrace(top_object, ray, prd);
+
+  use_filter[launch_index] = prd.hit;
 
   z_perp_min[launch_index] = prd.zpmin;
 
@@ -232,6 +236,8 @@ RT_PROGRAM void display_camera() {
     }
     if (view_mode == 3)
       output_buffer[launch_index] = make_color( heatMap(z_perp_min[launch_index]/200. ));
+    if (view_mode == 4)
+      output_buffer[launch_index] = make_color( make_float3(use_filter[launch_index]) );
   }
 }
 
@@ -258,7 +264,7 @@ __device__ __inline__ void indirectFilter(
     float target_zpmin = z_perp_min[target_index];
     float3 target_n = n[target_index];
     //bool use_filt = use_filt_indirect[target_index];
-    bool use_filt = true;
+    bool use_filt = use_filter[target_index];
 
     if (use_filt 
         && acos(dot(target_n, cur_n)) < angle_threshold
@@ -296,9 +302,10 @@ RT_PROGRAM void indirect_filter_first_pass()
 
   for (int i = -pixel_radius.x; i < pixel_radius.x; i++) 
   {
-    indirectFilter(blurred_indirect_sum, sum_weight,
-        cur_world_loc, cur_n, cur_zpmin, launch_index.x+i, launch_index.y,
-        buf_size, 0);
+    if (use_filter[launch_index]) 
+      indirectFilter(blurred_indirect_sum, sum_weight,
+          cur_world_loc, cur_n, cur_zpmin, launch_index.x+i, launch_index.y,
+          buf_size, 0);
   }
 
   if (sum_weight > 0.0001f)
@@ -321,9 +328,10 @@ RT_PROGRAM void indirect_filter_second_pass()
 
   for (int j = -pixel_radius.y; j < pixel_radius.y; j++) 
   {
-    indirectFilter(blurred_indirect_sum, sum_weight,
-        cur_world_loc, cur_n, cur_zpmin, launch_index.x, launch_index.y+j,
-        buf_size, 1);
+    if (use_filter[launch_index]) 
+      indirectFilter(blurred_indirect_sum, sum_weight,
+          cur_world_loc, cur_n, cur_zpmin, launch_index.x, launch_index.y+j,
+          buf_size, 1);
   }
 
   if (sum_weight > 0.0001f)
