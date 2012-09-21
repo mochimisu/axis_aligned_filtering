@@ -195,7 +195,7 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   Buffer zpmin = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height);
   m_context["z_perp_min"]->set(zpmin);
 
-  Buffer indirect_spp = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height);
+  Buffer indirect_spp = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT, RT_FORMAT_FLOAT, _width, _height);
   m_context["indirect_spp"]->set(indirect_spp);
 
   Buffer use_filter = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_UNSIGNED_BYTE, _width, _height);
@@ -518,46 +518,7 @@ light_buffer->unmap();
     static_cast<unsigned int>(buffer_height) );
   m_context->launch( 3, static_cast<unsigned int>(buffer_width),
     static_cast<unsigned int>(buffer_height) );
-  /*
-  //Filter s1,s2
-  m_context->launch( 4, static_cast<unsigned int>(buffer_width),
-    static_cast<unsigned int>(buffer_height) );
-  m_context->launch( 5, static_cast<unsigned int>(buffer_width),
-    static_cast<unsigned int>(buffer_height) );
-  //Filter occlusion
-  m_context->launch( 2, static_cast<unsigned int>(buffer_width),
-    static_cast<unsigned int>(buffer_height) );
-  m_context->launch( 3, static_cast<unsigned int>(buffer_width),
-    static_cast<unsigned int>(buffer_height) );
-    */
-  //Display
- 
-  /*
-  if (_view_mode) {
-    if (_view_mode == 2) {
-      //scale
-      Buffer slope = m_context["slope"]->getBuffer();
-      float min_s2 = 100000000.0;
-      float max_s2 = 0.0;
-      float2* slope_arr = reinterpret_cast<float2*>( slope->map() );
-      for(unsigned int j = 0; j < _height; ++j ) {
-        for(unsigned int i = 0; i < _width; ++i ) {
-          //std::cout << spp_arr[i+j*_width] <<", ";
-          float cur_s2_val = slope_arr[i+j*_width].y;
-          if (cur_s2_val < 9999.0 && cur_s2_val > 0.01) {
-            min_s2 = min(min_s2,cur_s2_val);
-            max_s2 = max(max_s2,cur_s2_val);
-          }
-        }
-        //std::cout << std::endl;
-      }
-      m_context["max_disp_val"]->setFloat(max_s2);
-      m_context["min_disp_val"]->setFloat(min_s2);
-      std::cout << "max,min s2: " << max_s2 << ", " << min_s2 << std::endl;
-      slope->unmap();
-    }
-  }
-  */
+
   m_context->launch( 1, static_cast<unsigned int>(buffer_width),
     static_cast<unsigned int>(buffer_height) );
 
@@ -799,87 +760,36 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
   case 'V':
   case 'v':
     {
-#ifdef SPP_STATS
       std::cout << "SPP stats" << std:: endl;
-      //spp = m_context["spp"]->getBuffer();
-      Buffer cur_spp = m_context["spp_cur"]->getBuffer();
-      Buffer brdf = m_context["brdf"]->getBuffer();
-      spp = m_context["spp"]->getBuffer();
-      float min_cur_spp = 10000000.0;
-      float max_cur_spp = 0.0;
-      float avg_cur_spp = 0.0;
-      float min_spp = 100000000.0; //For some reason, numeric_limits gives me something weird in the end? //std::numeric_limits<float>::max();
-      float max_spp = 0.0;
-      float avg_spp = 0.0;
-      //float* spp_arr = reinterpret_cast<float*>( spp->map() );
-      float* spp_arr = reinterpret_cast<float*>( spp->map() );
-      float3* brdf_arr = reinterpret_cast<float3*>( brdf->map() );
+      Buffer spp = m_context["indirect_spp"]->getBuffer();
+      Buffer valid = m_context["use_filter"]->getBuffer();
+      int min_spp = 100000000.;
+      int max_spp = 0;
+      float avg_spp = 0;
       int num_avg = 0;
 
-      int num_low = 0;
+      int* spp_arr = reinterpret_cast<int*>( spp->map() );
+      char* valid_arr = reinterpret_cast<char*>( valid->map() );
+
       for(unsigned int j = 0; j < _height; ++j ) {
         for(unsigned int i = 0; i < _width; ++i ) {
-          //std::cout << spp_arr[i+j*_width] <<", ";
-          float cur_brdf_x = brdf_arr[i+j*_width].x;
-          if (cur_brdf_x > -1) {
-            //std::cout << "brdf: " << cur_brdf_x << std::endl;
+          if (valid_arr[i+j*_width] > -1) {
             float cur_spp_val = spp_arr[i+j*_width];
             if (cur_spp_val > -0.001) {
               min_spp = min(min_spp,cur_spp_val);
               max_spp = max(max_spp,cur_spp_val);
               avg_spp += cur_spp_val;
               num_avg++;
-              if (cur_spp_val < 10)
-                num_low++;
-
             }
           } 
         }
-        //std::cout << std::endl;
       }
       spp->unmap();
+      valid->unmap();
       avg_spp /= num_avg;
-      uint2 err_loc;
-      uint2 err_first_loc;
-      bool first_loc_set = false;
-      int num_cur_avg = 0;
-      int num_cur_low = 0;
-      float* cur_spp_arr = reinterpret_cast<float*>( cur_spp->map() );
-      for(unsigned int j = 0; j < _height; ++j ) {
-        for(unsigned int i = 0; i < _width; ++i ) {
-          float cur_brdf_x = brdf_arr[i+j*_width].x;
-          if (cur_brdf_x > -1) {
-            //std::cout << spp_arr[i+j*_width] <<", ";
-            float cur_spp_val = cur_spp_arr[i+j*_width];
-            if (cur_spp_val > -0.001) {
-              min_cur_spp = min(min_cur_spp,cur_spp_val);
-              max_cur_spp = max(max_cur_spp,cur_spp_val);
-              avg_cur_spp += cur_spp_val;
-              num_cur_avg++;
-              if (cur_spp_val < 10)
-                num_cur_low++;
-            }
-          }
-        }
-        //std::cout << std::endl;
-      }
-      cur_spp->unmap();
-      brdf->unmap();
-      avg_cur_spp /= num_cur_avg;
-      std::cout << "Num cur spp below 10spp" << num_cur_low << std::endl;
-      std::cout << "Num theoretical spp below 10spp" << num_low << std::endl;
-      std::cout << "Num current sampled" << num_cur_avg << std::endl;
-      std::cout << "Num theoretical sampled" << num_avg << std::endl;
-
-      std::cout << "Minimum SPP: " << min_cur_spp << std::endl;
-      std::cout << "Maximum SPP: " << max_cur_spp << std::endl;
-      std::cout << "Average SPP: " << avg_cur_spp << std::endl;
-      std::cout << "Minimum Theoretical SPP: " << min_spp << std::endl;
-      std::cout << "Maximum Theoretical SPP: " << max_spp << std::endl;
-      std::cout << "Average Theoretical SPP: " << avg_spp << std::endl;
-#else
-      std::cout << "SPP stats turned off (GPU local buffer)" << std::endl;
-#endif
+      std::cout << "Minimum SPP: " << min_spp << std::endl;
+      std::cout << "Maximum SPP: " << max_spp << std::endl;
+      std::cout << "Average SPP: " << avg_spp << std::endl;
       return true;
     }
   case 'C':
