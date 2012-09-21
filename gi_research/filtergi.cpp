@@ -195,43 +195,11 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   Buffer zpmin = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height);
   m_context["z_perp_min"]->set(zpmin);
 
+  Buffer indirect_spp = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height);
+  m_context["indirect_spp"]->set(indirect_spp);
+
   Buffer use_filter = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_UNSIGNED_BYTE, _width, _height);
   m_context["use_filter"]->set(use_filter);
-
-  // BRDF buffer
-#ifdef SPP_STATS
-  _brdf = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT, RT_FORMAT_FLOAT3, _width, _height );
-#else
-  _brdf = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height );
-#endif
-  m_context["brdf"]->set( _brdf );
-
-  // Occlusion buffer
-  _vis = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height );
-  m_context["vis"]->set( _vis );
-
-  // Blurred (on one dimension) cclusion accumulation buffer
-  Buffer _occ_blur = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height );
-  m_context["vis_blur1d"]->set( _occ_blur );
-
-  // samples per pixel buffer
-#ifdef SPP_STATS
-  Buffer spp = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT, RT_FORMAT_FLOAT, _width, _height );
-#else
-  Buffer spp = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height );
-#endif
-  m_context["spp"]->set( spp );
-
-  // current samples per pixel buffer
-#ifdef SPP_STATS
-  Buffer spp_cur = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT, RT_FORMAT_FLOAT, _width, _height );
-#else
-  Buffer spp_cur = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height );
-#endif
-  m_context["spp_cur"]->set( spp_cur );
-
-  Buffer slope = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT2, _width, _height );
-  m_context["slope"]->set( slope );
 
   // gauss values
   Buffer gauss_lookup = m_context->createBuffer( RT_BUFFER_INPUT, RT_FORMAT_FLOAT, 65);
@@ -695,6 +663,7 @@ void FilterGI::resetAccumulation()
 
 bool FilterGI::keyPressed(unsigned char key, int x, int y) {
   float delta = 0.5f;
+  const unsigned int num_view_modes = 5;
 
   Buffer spp;
   switch(key) {
@@ -963,9 +932,9 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
   case 'Z':
   case 'z':
     if (key == 'Z')
-      _view_mode = (_view_mode-1)%5;
+      _view_mode = (_view_mode-1)%num_view_modes;
     else
-      _view_mode = (_view_mode+1)%5;
+      _view_mode = (_view_mode+1)%num_view_modes;
     m_context["view_mode"]->setUint(_view_mode);
     switch(_view_mode) {
     case 0:

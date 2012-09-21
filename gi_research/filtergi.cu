@@ -142,14 +142,9 @@ rtBuffer<float3, 2>               indirect_illum_filt;
 rtBuffer<float4, 2>               indirect_illum_accum;
 rtBuffer<char, 2>                 use_filter;
 
-rtBuffer<float3, 2>               brdf;
-//divided occlusion, undivided occlusion, wxf, num_samples
-rtBuffer<float3, 2>               vis;
-rtBuffer<float, 2>                vis_blur1d;
 rtBuffer<float3, 2>               world_loc;
 rtBuffer<float3, 2>               n;
-rtBuffer<float, 2>                spp;
-rtBuffer<float, 2>                spp_cur;
+rtBuffer<int, 2>                  indirect_spp;
 
 rtBuffer<BasicLight>        lights;
 
@@ -167,8 +162,6 @@ rtDeclareVariable(float,          zmin_rpp_scale, , );
 rtDeclareVariable(int2,           pixel_radius, , );
 rtDeclareVariable(int2,           pixel_radius_wxf, , );
 
-rtDeclareVariable(uint,           show_brdf, , );
-rtDeclareVariable(uint,           show_occ, , );
 
 rtDeclareVariable(float,          max_disp_val, , );
 rtDeclareVariable(float,          min_disp_val, , );
@@ -189,21 +182,22 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
     indirect_illum_accum[launch_index] = make_float4(0);
     z_perp_min[launch_index] = 100000000;
     use_filter[launch_index] = false;
+    indirect_spp[launch_index] = 0;
   }
 
   // Initialize the stuff we use in later passes
-  brdf[launch_index] = make_float3(0,0,0);
 
   optix::Ray ray(ray_origin, ray_direction, radiance_ray_type, scene_epsilon);
   prd.sqrt_num_samples = normal_rpp;
   prd.hit = false;
   prd.zpmin = z_perp_min[launch_index];
+  prd.indirect_spp = indirect_spp[launch_index];
 
   rtTrace(top_object, ray, prd);
 
   use_filter[launch_index] = prd.hit;
-
   z_perp_min[launch_index] = prd.zpmin;
+  indirect_spp[launch_index] = prd.indirect_spp;
 
   world_loc[launch_index] = prd.world_loc;
   direct_illum[launch_index] = prd.direct;
@@ -215,7 +209,7 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
 
 RT_PROGRAM void display_camera() {
 
-  if (brdf[launch_index].x < -1.0f) {
+  if (direct_illum[launch_index].x < -1.0f) {
     output_buffer[launch_index] = make_color( bg_color );
     return;
   }
@@ -481,6 +475,7 @@ RT_PROGRAM void closest_hit_radiance()
 
   float num = indirect_illum_accum[launch_index].w \
               + (sample_sqrt*sample_sqrt);
+  prd_radiance.indirect_spp += sample_sqrt * sample_sqrt;
 
 
   indirect_illum_accum[launch_index].w = num;

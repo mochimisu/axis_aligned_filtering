@@ -51,6 +51,9 @@ struct PerRayData_radiance
   int sqrt_num_samples;
 
   // Things to specify and will get updated
+  int indirect_spp;
+  float zpmin;
+  float3 indirect;
   
   // Things that will be generated automatically
 
@@ -60,10 +63,6 @@ struct PerRayData_radiance
   float3 world_loc;
   float3 n;
   float3 direct;
-  float3 indirect;
-  float zpmin;
-  //float3 brdf;
-  //int obj_id;
 };
 
 struct PerRayData_indirect
