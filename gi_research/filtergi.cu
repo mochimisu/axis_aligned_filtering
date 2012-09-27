@@ -5,6 +5,14 @@
 * Brandon Wang, Soham Mehta
 */
 
+
+/*
+
+   todo
+   2 passes
+   limit spp
+   */
+
 #include "filtergi.h"
 
 rtDeclareVariable(float3, geometric_normal, attribute geometric_normal, );
@@ -12,6 +20,7 @@ rtDeclareVariable(float3, shading_normal,   attribute shading_normal, );
 
 rtDeclareVariable(PerRayData_radiance, prd_radiance, rtPayload, );
 rtDeclareVariable(PerRayData_indirect,   prd_indirect,   rtPayload, );
+rtDeclareVariable(PerRayData_shadow,   prd_shadow,   rtPayload, );
 
 rtDeclareVariable(optix::Ray, ray,          rtCurrentRay, );
 rtDeclareVariable(float,      t_hit,        rtIntersectionDistance, );
@@ -19,10 +28,11 @@ rtDeclareVariable(uint2,      launch_index, rtLaunchIndex, );
 
 rtDeclareVariable(unsigned int, radiance_ray_type, , );
 rtDeclareVariable(unsigned int, indirect_ray_type , , );
+rtDeclareVariable(unsigned int, shadow_ray_type , , );
 rtDeclareVariable(float,        scene_epsilon, , );
 rtDeclareVariable(rtObject,     top_object, , );
 
-rtDeclareVariable(float,          light_sigma, , );
+rtDeclareVariable(unsigned int,        max_spp, , );
 
 // Create ONB from normal.  Resulting W is Parallel to normal
 __device__ __inline__ void createONB( const optix::float3& n,
@@ -104,7 +114,7 @@ __device__ __inline__ float gaussFilter(float distsq, float wxf)
     return 0.0;
   }
 
-  return exp(-3*sample);
+  return exp(-sample);
 }
 
 
@@ -232,7 +242,11 @@ RT_PROGRAM void display_camera() {
       output_buffer[launch_index] = make_color( heatMap(z_perp_min[launch_index]/200. ));
     if (view_mode == 4)
       output_buffer[launch_index] = make_color( make_float3(use_filter[launch_index]) );
+    //filt radius = 1/zpmin
+    //spp
   }
+
+  //output_buffer[launch_index] = make_color( world_loc[launch_index]/1000. );
 }
 
 __device__ __inline__ void indirectFilter( 
@@ -271,7 +285,7 @@ __device__ __inline__ void indirectFilter(
 
       if (euclidean_distsq < (dist_threshold*dist_threshold))
       {
-        float weight = gaussFilter(euclidean_distsq, 1/cur_zpmin);
+        float weight = gaussFilter(euclidean_distsq, 3/cur_zpmin);
 
         blurred_indirect_sum += weight * target_indirect;
         sum_weight += weight;
@@ -357,6 +371,13 @@ rtDeclareVariable(float, importance_cutoff, , );
 rtDeclareVariable(int, max_depth, , );
 
 
+RT_PROGRAM void any_hit_shadow()
+{
+  prd_shadow.hit = true;
+  prd_shadow.attenuation = make_float3(0);
+  prd_shadow.distance = t_hit;
+}
+
 //
 // Calculates indirect color
 //
@@ -389,6 +410,16 @@ RT_PROGRAM void any_hit_indirect()
   if (nDh > 0)
     color += Ks * pow(nDh, phong_exp);
   prd_indirect.color = color;
+
+  //shadow
+  optix::Ray shadow_ray ( hit_point, L, shadow_ray_type, 0.001);
+
+  PerRayData_shadow shadow_prd;
+  shadow_prd.hit = false;
+  rtTrace(top_shadower, shadow_ray, shadow_prd);
+  if (shadow_prd.hit &&( shadow_prd.distance*shadow_prd.distance) < dot(to_light,to_light)) {
+    prd_indirect.color = make_float3(0);
+  }
 
 }
 
@@ -429,6 +460,16 @@ RT_PROGRAM void closest_hit_radiance()
   if (nDh > 0)
     color += Ks * pow(nDh, phong_exp);
   prd_radiance.direct = color;
+
+  //shadow
+  optix::Ray shadow_ray ( hit_point, L, shadow_ray_type, 0.001);
+
+  PerRayData_shadow shadow_prd;
+  shadow_prd.hit = false;
+  rtTrace(top_shadower, shadow_ray, shadow_prd);
+  if (shadow_prd.hit &&( shadow_prd.distance*shadow_prd.distance) < dot(to_light,to_light)) {
+    prd_radiance.direct = make_float3(0);
+  }
 
   //indirect values
   int sample_sqrt = 2;

@@ -114,7 +114,6 @@ private:
   BasicLight * _env_lights;
   uint _show_brdf;
   uint _show_occ;
-  float _sigma;
 
   Buffer light_buffer;
 
@@ -137,6 +136,8 @@ private:
 FilterGI* _scene;
 int output_num = 0;
 
+int max_spp = 4;//250;
+
 void FilterGI::initScene( InitialCameraData& camera_data )
 {
   _anim_t = 0;
@@ -149,17 +150,19 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   _ptx_path = ptxpath( "filtergi", ss.str() );
 
   // context 
-  m_context->setRayTypeCount( 2 );
+  m_context->setRayTypeCount( 3 );
   m_context->setEntryPointCount( 4 );
   m_context->setStackSize( 8000 );
 
   m_context["max_depth"]->setInt(100);
   m_context["radiance_ray_type"]->setUint(0);
   m_context["indirect_ray_type"]->setUint(1);
+  m_context["shadow_ray_type"]->setUint(2);
   m_context["frame_number"]->setUint( 0u );
   m_context["scene_epsilon"]->setFloat( 1.e-3f );
   m_context["importance_cutoff"]->setFloat( 0.01f );
   m_context["ambient_light_color"]->setFloat( 0.31f, 0.33f, 0.28f );
+  m_context["max_spp"]->setInt(max_spp);
 
   m_context["output_buffer"]->set( createOutputBuffer(RT_FORMAT_UNSIGNED_BYTE4, _width, _height) );
 
@@ -406,6 +409,7 @@ Buffer FilterGI::getOutputBuffer()
 void FilterGI::trace( const RayGenCameraData& camera_data )
 {
   _frame_number ++;
+
   /*
   if (_frame_number == 3) {
   std::cout << "Matrix of spp" << std:: endl;
@@ -427,6 +431,14 @@ void FilterGI::trace( const RayGenCameraData& camera_data )
     resetAccumulation();
     _benchmark_iter = 0;
   }
+
+  if (_frame_number == max_spp)
+  {
+    std::cout << "Max SPP (" << max_spp << ") reached!" << std::endl;
+  }
+
+  if (_frame_number > max_spp)
+    return;
 
 
   double t;
@@ -792,20 +804,7 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
       std::cout << "Average SPP: " << avg_spp << std::endl;
       return true;
     }
-  case 'C':
-  case 'c':
-    _sigma += 0.1;
-    m_context["light_sigma"]->setFloat(_sigma);
-    std::cout << "Light sigma is now: " << _sigma << std::endl;
-    m_camera_changed = true;
-    return true;
-  case 'X':
-  case 'x':
-    _sigma -= 0.1;
-    m_context["light_sigma"]->setFloat(_sigma);
-    std::cout << "Light sigma is now: " << _sigma << std::endl;
-    m_camera_changed = true;
-    return true;
+
 
   case 'A':
   case 'a':
@@ -1013,6 +1012,7 @@ void FilterGI::createGeometry()
   //Intersection programs
   Program closest_hit = m_context->createProgramFromPTXFile(_ptx_path, "closest_hit_radiance");
   Program any_hit = m_context->createProgramFromPTXFile(_ptx_path, "any_hit_indirect");
+  Program shadow_hit = m_context->createProgramFromPTXFile(_ptx_path, "any_hit_shadow");
 
   Program diffuse_ch = closest_hit;
   Program diffuse_ah = any_hit;
@@ -1037,7 +1037,8 @@ void FilterGI::createGeometry()
   //Program diffuse_ch = m_context->createProgramFromPTXFile( ptxpath( "path_tracer", "path_tracer.cu" ), "diffuse" );
   //Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "path_tracer", "path_tracer.cu" ), "shadow" );
   diffuse->setClosestHitProgram( 0, diffuse_ch );
-  diffuse->setAnyHitProgram( 1, diffuse_ah );
+  diffuse->setClosestHitProgram( 1, diffuse_ah );
+  diffuse->setAnyHitProgram( 2, shadow_hit );
 
   //Material diffuse_light = m_context->createMaterial();
   //Program diffuse_em = m_context->createProgramFromPTXFile( ptxpath( "path_tracer", "path_tracer.cu" ), "diffuseEmitter" );

@@ -72,3 +72,9 @@ struct PerRayData_indirect
   float distance;
 };
 
+struct PerRayData_shadow
+{
+  bool hit;
+  float3 attenuation;
+  float distance;
+};
