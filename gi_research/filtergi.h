@@ -53,6 +53,7 @@ struct PerRayData_radiance
   // Things to specify and will get updated
   int indirect_spp;
   float zpmin;
+  float zpmax;
   float3 indirect;
   
   // Things that will be generated automatically

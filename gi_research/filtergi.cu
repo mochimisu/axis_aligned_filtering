@@ -146,7 +146,8 @@ rtDeclareVariable(float3, bg_color, , );
 //new gi stuff
 rtBuffer<float3, 2>               direct_illum;
 rtBuffer<float3, 2>               indirect_illum;
-rtBuffer<float, 2>                z_perp_min;
+rtBuffer<float3, 2>               indirect_illum_sep;
+rtBuffer<float2, 2>                z_perp;
 rtBuffer<float3, 2>               indirect_illum_blur1d;
 rtBuffer<float3, 2>               indirect_illum_filt;
 rtBuffer<float4, 2>               indirect_illum_accum;
@@ -155,6 +156,7 @@ rtBuffer<char, 2>                 use_filter;
 rtBuffer<float3, 2>               world_loc;
 rtBuffer<float3, 2>               n;
 rtBuffer<int, 2>                  indirect_spp;
+rtBuffer<int, 2>                  target_indirect_spp;
 
 rtBuffer<BasicLight>        lights;
 
@@ -178,6 +180,9 @@ rtDeclareVariable(float,          min_disp_val, , );
 
 rtDeclareVariable(float,          spp_mu, , );
 
+rtDeclareVariable(uint2,          image_dim, , );
+rtDeclareVariable(float,          fov, , );
+
 RT_PROGRAM void pinhole_camera_initial_sample() {
   // Find direction to shoot ray in
   size_t2 screen = output_buffer.size();
@@ -187,32 +192,56 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
   float3 ray_direction = normalize(d.x*U + d.y*V + W);
   PerRayData_radiance prd;
 
+  uint2 bucket_index = make_uint2(launch_index.x, launch_index.y*4);
+
   if (frame == 0)
   {
-    indirect_illum_accum[launch_index] = make_float4(0);
-    z_perp_min[launch_index] = 100000000;
+    for(int i = 0; i < 4; ++i)
+    {
+      uint2 cur_bucket_index = make_uint2(bucket_index.x, bucket_index.y+i);
+      indirect_illum_accum[cur_bucket_index] = make_float4(0);
+      indirect_illum_sep[cur_bucket_index] = make_float3(0,0,0);
+      z_perp[cur_bucket_index] = make_float2(100000000,0);
+    }
+
     use_filter[launch_index] = false;
     indirect_spp[launch_index] = 0;
   }
+
 
   // Initialize the stuff we use in later passes
 
   optix::Ray ray(ray_origin, ray_direction, radiance_ray_type, scene_epsilon);
   prd.sqrt_num_samples = normal_rpp;
   prd.hit = false;
-  prd.zpmin = z_perp_min[launch_index];
   prd.indirect_spp = indirect_spp[launch_index];
 
   rtTrace(top_object, ray, prd);
+  // SPP
+  //assuming 1:1 aspect
+  float proj_dist = 2./image_dim.y * prd.t_hit*tan(fov/2.*M_PI/180.);
+  float wvmax = 3.f;
+  float alpha = 0.5;
+  float spp_term1 = proj_dist * wvmax/prd.zpmin + alpha;
+  float spp_term2 = 1+prd.zpmax/prd.zpmin;
+
+  float spp = spp_term1*spp_term1 * wvmax*wvmax * spp_term2*spp_term2;
+
+  target_indirect_spp[launch_index] = spp;
 
   use_filter[launch_index] = prd.hit;
-  z_perp_min[launch_index] = prd.zpmin;
   indirect_spp[launch_index] = prd.indirect_spp;
 
   world_loc[launch_index] = prd.world_loc;
   direct_illum[launch_index] = prd.direct;
   indirect_illum[launch_index] = prd.indirect;
   n[launch_index] = normalize(prd.n);
+
+  // Visualize projected distances
+  //direct_illum[launch_index] = make_float3( proj_dist/10.0 );
+
+  // Visualize SPP
+  //direct_illum[launch_index] = heatMap(spp/1000.);
 }
 
 
@@ -229,6 +258,7 @@ RT_PROGRAM void display_camera() {
     output_buffer[launch_index] = make_color( direct_illum[launch_index]+indirect_illum_filt[launch_index]);
 
   if (view_mode) {
+    uint2 bucket_index = make_uint2(launch_index.x, launch_index.y*4);
     if (view_mode == 1)
       output_buffer[launch_index] = make_color( direct_illum[launch_index] );
     if (view_mode == 2) 
@@ -239,9 +269,19 @@ RT_PROGRAM void display_camera() {
         output_buffer[launch_index] = make_color( indirect_illum[launch_index]);
     }
     if (view_mode == 3)
-      output_buffer[launch_index] = make_color( heatMap(z_perp_min[launch_index]/200. ));
+      output_buffer[launch_index] = make_color( heatMap(z_perp[bucket_index].x/200. ));
     if (view_mode == 4)
       output_buffer[launch_index] = make_color( make_float3(use_filter[launch_index]) );
+    if (view_mode == 5 || view_mode == 6 || view_mode == 7 || view_mode == 8) {
+      int sep_ind = view_mode-5;
+      output_buffer[launch_index] = make_color( indirect_illum_sep[make_uint2(
+            launch_index.x, launch_index.y*4+sep_ind )]);
+    }
+    if (view_mode == 9 || view_mode == 10 || view_mode == 11 || view_mode == 12) {
+      int sep_ind = view_mode-9;
+      output_buffer[launch_index] = make_color( heatMap(z_perp[make_uint2(
+              bucket_index.x, bucket_index.y+sep_ind)].x/200.));
+    }
     //filt radius = 1/zpmin
     //spp
   }
@@ -269,7 +309,8 @@ __device__ __inline__ void indirectFilter(
     float3 target_indirect = indirect_illum[target_index];
     if (pass == 1)
       target_indirect = indirect_illum_blur1d[target_index];
-    float target_zpmin = z_perp_min[target_index];
+    uint2 target_bucket_index = make_uint2(target_index.x, target_index.y*4);
+    float target_zpmin = z_perp[target_bucket_index].x;
     float3 target_n = n[target_index];
     //bool use_filt = use_filt_indirect[target_index];
     bool use_filt = use_filter[target_index];
@@ -298,7 +339,8 @@ __device__ __inline__ void indirectFilter(
 RT_PROGRAM void indirect_filter_first_pass()
 {
   float3 cur_indirect = indirect_illum[launch_index];
-  float cur_zpmin = z_perp_min[launch_index];
+  uint2 bucket_index = make_uint2(launch_index.x, launch_index.y*4);
+  float cur_zpmin = z_perp[bucket_index].x;
   size_t2 buf_size = indirect_illum.size();
   float3 blurred_indirect = cur_indirect;
 
@@ -324,7 +366,8 @@ RT_PROGRAM void indirect_filter_first_pass()
 RT_PROGRAM void indirect_filter_second_pass()
 {
   float3 cur_indirect = indirect_illum_blur1d[launch_index];
-  float cur_zpmin = z_perp_min[launch_index];
+  uint2 bucket_index = make_uint2(launch_index.x, launch_index.y*4);
+  float cur_zpmin = z_perp[bucket_index].x;
   size_t2 buf_size = indirect_illum_blur1d.size();
   float3 blurred_indirect = cur_indirect;
 
@@ -476,17 +519,27 @@ RT_PROGRAM void closest_hit_radiance()
   float3 u,v,w;
   float3 sampleDir;
   createONB(ffnormal, u,v,w);
-  float4 curIndAccum = indirect_illum_accum[launch_index];
-  float3 indirectColor = make_float3(curIndAccum.x, curIndAccum.y, curIndAccum.z);
+  uint2 bucket_index = make_uint2(launch_index.x, launch_index.y*4);
+  //float4 curIndAccum = indirect_illum_accum[launch_index];
+  //float3 indirectColor = make_float3(curIndAccum.x, curIndAccum.y, curIndAccum.z);
   float2 sample = make_float2(0);
+  int xbucket = 0;
+  int ybucket = 0;
+  int totbucket = 0;
   //stratify
   for(int i=0; i<sample_sqrt; ++i) {
     seed.x = rot_seed(seed.x, i);
-    sample.x = (sample.x+((float)i))/sample_sqrt;
+    sample.x = (rnd(seed.x)+((float)i))/sample_sqrt;
+    if(i > sample_sqrt/2-1)
+      xbucket = 1;
+    ybucket = 0;
     for(int j=0; j<sample_sqrt; ++j) {
       seed.y = rot_seed(seed.y, j);
-      sample.y = (sample.y+((float)j))/sample_sqrt;
-      float2 sample = make_float2( rnd(seed.x), rnd(seed.y) );
+      sample.y = (rnd(seed.y)+((float)j))/sample_sqrt;
+      if(j > sample_sqrt/2-1)
+        ybucket = 1;
+      totbucket = 2*xbucket+ybucket;
+      //float2 sample = make_float2( rnd(seed.x), rnd(seed.y) );
       sampleUnitHemisphere( sample, u,v,w, sampleDir);
 
       //construct indirect sample
@@ -499,17 +552,29 @@ RT_PROGRAM void closest_hit_radiance()
       optix::Ray indirect_ray ( hit_point, sampleDir, indirect_ray_type, 0.001);//scene_epsilon );
 
       rtTrace(top_shadower, indirect_ray, indirect_prd);
+      uint2 cur_bucket_index = make_uint2(launch_index.x,launch_index.y*4 +totbucket);
 
       if(indirect_prd.hit) {
         float3 zvec = indirect_prd.distance*sampleDir;
         float cur_zpmin = sqrt(dot(zvec,zvec) - dot(ffnormal,zvec));
-        prd_radiance.zpmin = min(prd_radiance.zpmin, cur_zpmin);
+        z_perp[cur_bucket_index].x = min(z_perp[cur_bucket_index].x, cur_zpmin);
+        z_perp[cur_bucket_index].y = max(z_perp[cur_bucket_index].y, cur_zpmin);
+        // TODO: find actual zpmax
+        //prd_radiance.zpmax = max(prd_radiance.zpmax, cur_zpmin);
       }
 
       //nDl term needed if sampling by cosine density?
       //float nDl = max(dot( ffnormal, normalize(sampleDir)), 0.f);
+      float3 cur_ind = Kd * indirect_prd.color;
 
-      indirectColor += Kd * indirect_prd.color;
+      //indirectColor += Kd * indirect_prd.color;
+
+
+      //TODO: optimize
+      indirect_illum_accum[cur_bucket_index].x += cur_ind.x;
+      indirect_illum_accum[cur_bucket_index].y += cur_ind.y;
+      indirect_illum_accum[cur_bucket_index].z += cur_ind.z;
+      indirect_illum_accum[cur_bucket_index].w += 1;
       
     }
   }
@@ -519,12 +584,35 @@ RT_PROGRAM void closest_hit_radiance()
   prd_radiance.indirect_spp += sample_sqrt * sample_sqrt;
 
 
+  /*
   indirect_illum_accum[launch_index].w = num;
   indirect_illum_accum[launch_index].x = indirectColor.x;
   indirect_illum_accum[launch_index].y = indirectColor.y;
   indirect_illum_accum[launch_index].z = indirectColor.z;
+  */
 
-  prd_radiance.indirect = indirectColor/num;
+  //avg diff hemispheres
+  float3 indirect_color = make_float3(0);
+  float num_samp = 0;
+  for(int i = 0; i < 4; ++i) {
+    uint2 cur_bucket_index = make_uint2(
+        bucket_index.x,
+        bucket_index.y+i);
+    float3 cur_indirect_color = make_float3(
+        indirect_illum_accum[cur_bucket_index].x,
+        indirect_illum_accum[cur_bucket_index].y,
+        indirect_illum_accum[cur_bucket_index].z);
+    float cur_num_samp = indirect_illum_accum[cur_bucket_index].w;
+
+    indirect_color += cur_indirect_color;
+    num_samp += cur_num_samp;
+
+    indirect_illum_sep[cur_bucket_index] = cur_indirect_color / cur_num_samp;
+  }
+
+  prd_radiance.indirect = indirect_color/num_samp;
+
+  //prd_radiance.indirect = indirect_illum_accum[bucket_index].xindirect_illum_accum[bucket_index];
 
   indirect_rng_seeds[launch_index] = seed;
 

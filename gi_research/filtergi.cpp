@@ -25,12 +25,14 @@
 #include <Mouse.h>
 
 using namespace optix;
+unsigned int width = 1080u, height = 720u;
+float fov = 60.f;
 
 class FilterGI : public SampleScene
 {
 public:
   FilterGI(const std::string& texture_path)
-    : SampleScene(), _width(1080u), _height(720u), texture_path( texture_path )
+    : SampleScene(), _width(width), _height(height), texture_path( texture_path )
     , _frame_number( 0 ), _keep_trying( 1 )
   {
     // reserve some space for timings vector
@@ -136,7 +138,7 @@ private:
 FilterGI* _scene;
 int output_num = 0;
 
-int max_spp = 4;//250;
+int max_spp = 500;//250;
 
 void FilterGI::initScene( InitialCameraData& camera_data )
 {
@@ -163,6 +165,8 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   m_context["importance_cutoff"]->setFloat( 0.01f );
   m_context["ambient_light_color"]->setFloat( 0.31f, 0.33f, 0.28f );
   m_context["max_spp"]->setInt(max_spp);
+  m_context["image_dim"]->setUint(width, height);
+  m_context["fov"]->setFloat(fov);
 
   m_context["output_buffer"]->set( createOutputBuffer(RT_FORMAT_UNSIGNED_BYTE4, _width, _height) );
 
@@ -183,11 +187,14 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   m_context["direct_illum"]->set(direct_illum);
 
   Buffer indirect_illum = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
-  
-  Buffer indirect_illum_accum = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT4, _width, _height);
-  m_context["indirect_illum_accum"]->set(indirect_illum_accum);
-
   m_context["indirect_illum"]->set(indirect_illum);
+
+  Buffer indirect_illum_sep = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height*4);
+  m_context["indirect_illum_sep"]->set(indirect_illum_sep);
+  
+  // 4 for 4 splits of hemisphere
+  Buffer indirect_illum_accum = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT4, _width, _height*4);
+  m_context["indirect_illum_accum"]->set(indirect_illum_accum);
 
   Buffer indirect_illum_blur1d = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
   m_context["indirect_illum_blur1d"]->set(indirect_illum_blur1d);
@@ -195,11 +202,14 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   Buffer indirect_illum_filt = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
   m_context["indirect_illum_filt"]->set(indirect_illum_filt);
 
-  Buffer zpmin = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height);
-  m_context["z_perp_min"]->set(zpmin);
+  Buffer zpmin = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT2, _width, _height*4);
+  m_context["z_perp"]->set(zpmin);
 
   Buffer indirect_spp = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT, RT_FORMAT_FLOAT, _width, _height);
   m_context["indirect_spp"]->set(indirect_spp);
+
+  Buffer target_indirect_spp = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT, RT_FORMAT_FLOAT, _width, _height);
+  m_context["target_indirect_spp"]->set(target_indirect_spp);
 
   Buffer use_filter = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_UNSIGNED_BYTE, _width, _height);
   m_context["use_filter"]->set(use_filter);
@@ -490,7 +500,7 @@ light_buffer->unmap();
   
 //#endif
 
-  PinholeCamera pc( eye, lookat, make_float3(0,1,0), 60.f, 60.f/(640.0/480.0) );
+  PinholeCamera pc( eye, lookat, make_float3(0,1,0), fov, fov/(width/height) );
   pc.getEyeUVW( eye, u, v, w );
   m_context["eye"]->setFloat( eye );
   m_context["U"]->setFloat( u );
@@ -636,7 +646,7 @@ void FilterGI::resetAccumulation()
 
 bool FilterGI::keyPressed(unsigned char key, int x, int y) {
   float delta = 0.5f;
-  const unsigned int num_view_modes = 5;
+  const unsigned int num_view_modes = 13;
 
   Buffer spp;
   switch(key) {
@@ -860,6 +870,18 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
       break;
     case 4:
       std::cout << "View mode: Pixels using filter" << std::endl;
+      break;
+    case 5:
+    case 6:
+    case 7:
+    case 8:
+      std::cout << "View mode: Indirect Bucket " << (_view_mode-5) << std::endl;
+      break;
+    case 9:
+    case 10:
+    case 11:
+    case 12:
+      std::cout << "View mode: Z Perpendicular (min) bucket " << (_view_mode-9) << std::endl;
       break;
     default:
       std::cout << "View mode: Unknown" << std::endl;
@@ -1397,7 +1419,6 @@ int main( int argc, char** argv )
 {
   GLUTDisplay::init( argc, argv );
 
-  unsigned int width = 1080u, height = 720u;
   //unsigned int width = 1600u, height = 1080u;
   //unsigned int width = 640u, height = 480u;
 
