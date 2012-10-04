@@ -73,6 +73,18 @@ struct PerRayData_indirect
   float distance;
 };
 
+struct PerRayData_direct
+{
+  bool hit;
+  float3 color;
+  float t_hit;
+  float3 n;
+  float zpmin;
+  float zpmax;
+  float3 world_loc;
+  float3 Kd;
+};
+
 struct PerRayData_shadow
 {
   bool hit;

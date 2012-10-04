@@ -153,11 +153,11 @@ void FilterGI::initScene( InitialCameraData& camera_data )
 
   // context 
   m_context->setRayTypeCount( 3 );
-  m_context->setEntryPointCount( 4 );
+  m_context->setEntryPointCount( 5 );
   m_context->setStackSize( 8000 );
 
   m_context["max_depth"]->setInt(100);
-  m_context["radiance_ray_type"]->setUint(0);
+  m_context["direct_ray_type"]->setUint(0);
   m_context["indirect_ray_type"]->setUint(1);
   m_context["shadow_ray_type"]->setUint(2);
   m_context["frame_number"]->setUint( 0u );
@@ -188,6 +188,9 @@ void FilterGI::initScene( InitialCameraData& camera_data )
 
   Buffer indirect_illum = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
   m_context["indirect_illum"]->set(indirect_illum);
+
+  Buffer image_Kd = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
+  m_context["image_Kd"]->set(image_Kd);
 
   Buffer indirect_illum_sep = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height*4);
   m_context["indirect_illum_sep"]->set(indirect_illum_sep);
@@ -284,7 +287,7 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   _pixel_radius = make_int2(10,10);
   m_context["pixel_radius"]->setInt(_pixel_radius);
   
-  // Sampling program
+  // Initial ampling program
   std::string camera_name;
   camera_name = "pinhole_camera_initial_sample";
 
@@ -300,6 +303,14 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   Program second_indirect_filter_program = m_context->createProgramFromPTXFile( _ptx_path, 
     second_pass_indirect_filter_name );
   m_context->setRayGenerationProgram( 3, second_indirect_filter_program );
+
+  // second sampling
+  std::string continued_sample_camera;
+  continued_sample_camera = "pinhole_camera_continued_sample";
+
+  Program continued_sample_program = m_context->createProgramFromPTXFile( _ptx_path, continued_sample_camera );
+  m_context->setRayGenerationProgram( 4, continued_sample_program );
+
 
   // Display program
   std::string display_name;
@@ -533,8 +544,12 @@ light_buffer->unmap();
   //std::cout << "Number of passes to resample: " << num_resample << std::endl;
 
   //Initial 16 Samples
-  m_context->launch( 0, static_cast<unsigned int>(buffer_width),
-    static_cast<unsigned int>(buffer_height) );
+  if (_frame_number == 0)
+    m_context->launch( 0, static_cast<unsigned int>(buffer_width),
+      static_cast<unsigned int>(buffer_height) );
+  else
+    m_context->launch( 4, static_cast<unsigned int>(buffer_width),
+      static_cast<unsigned int>(buffer_height) );
   //filter indirect
   m_context->launch( 2, static_cast<unsigned int>(buffer_width),
     static_cast<unsigned int>(buffer_height) );
@@ -1032,7 +1047,7 @@ void FilterGI::setMaterial( GeometryInstance& gi,
 void FilterGI::createGeometry()
 {
   //Intersection programs
-  Program closest_hit = m_context->createProgramFromPTXFile(_ptx_path, "closest_hit_radiance");
+  Program closest_hit = m_context->createProgramFromPTXFile(_ptx_path, "closest_hit_direct");
   Program any_hit = m_context->createProgramFromPTXFile(_ptx_path, "any_hit_indirect");
   Program shadow_hit = m_context->createProgramFromPTXFile(_ptx_path, "any_hit_shadow");
 
