@@ -456,14 +456,6 @@ void FilterGI::trace( const RayGenCameraData& camera_data )
     _benchmark_iter = 0;
   }
 
-  if (_frame_number == max_spp)
-  {
-    std::cout << "Max SPP (" << max_spp << ") reached!" << std::endl;
-  }
-
-  if (_frame_number > max_spp)
-    return;
-
 
   double t;
   if(GLUTDisplay::getContinuousMode() != GLUTDisplay::CDNone) {
@@ -802,34 +794,52 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
     {
       std::cout << "SPP stats" << std:: endl;
       Buffer spp = m_context["indirect_spp"]->getBuffer();
+      Buffer target_spp = m_context["target_indirect_spp"]->getBuffer();
       Buffer valid = m_context["use_filter"]->getBuffer();
       int min_spp = 100000000.;
       int max_spp = 0;
       float avg_spp = 0;
+      int target_min_spp = 100000000.;
+      int target_max_spp = 0;
+      float target_avg_spp = 0;
       int num_avg = 0;
+      int target_num_avg = 0;
 
       int* spp_arr = reinterpret_cast<int*>( spp->map() );
-      char* valid_arr = reinterpret_cast<char*>( valid->map() );
+      int* target_spp_arr = reinterpret_cast<int*>( target_spp->map() );
+      //char* valid_arr = reinterpret_cast<char*>( valid->map() );
 
       for(unsigned int j = 0; j < _height; ++j ) {
         for(unsigned int i = 0; i < _width; ++i ) {
-          if (valid_arr[i+j*_width] > -1) {
+          //if (valid_arr[i+j*_width] > -1) {
             float cur_spp_val = spp_arr[i+j*_width];
+            float cur_target_spp_val = target_spp_arr[i+j*_width];
             if (cur_spp_val > -0.001) {
               min_spp = min(min_spp,cur_spp_val);
               max_spp = max(max_spp,cur_spp_val);
               avg_spp += cur_spp_val;
               num_avg++;
             }
-          } 
+            if (cur_target_spp_val > -0.001) {
+              target_min_spp = min(target_min_spp, cur_target_spp_val);
+              target_max_spp = max(target_max_spp, cur_target_spp_val);
+              target_avg_spp += cur_target_spp_val;
+              target_num_avg++;
+            }
+          //} 
         }
       }
       spp->unmap();
-      valid->unmap();
+      target_spp->unmap();
+      //valid->unmap();
       avg_spp /= num_avg;
+      target_avg_spp /= target_num_avg;
       std::cout << "Minimum SPP: " << min_spp << std::endl;
       std::cout << "Maximum SPP: " << max_spp << std::endl;
       std::cout << "Average SPP: " << avg_spp << std::endl;
+      std::cout << "Minimum Target SPP: " << target_min_spp << std::endl;
+      std::cout << "Maximum Target SPP: " << target_max_spp << std::endl;
+      std::cout << "Average Target SPP: " << target_avg_spp << std::endl;
       return true;
     }
 
