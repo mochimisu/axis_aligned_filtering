@@ -150,6 +150,7 @@ rtBuffer<float3, 2>               indirect_illum_sep;
 rtBuffer<float2, 2>                z_perp;
 rtBuffer<float3, 2>               indirect_illum_blur1d;
 rtBuffer<float3, 2>               indirect_illum_filt;
+rtBuffer<float3, 2>               indirect_illum_filt_int;
 rtBuffer<float4, 2>               indirect_illum_accum;
 rtBuffer<char, 2>                 use_filter;
 
@@ -345,11 +346,18 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
   
   // SPP
   //assuming 1:1 aspect
+  float minzpmin = z_perp[bucket_index].x;
+  float maxzpmax = z_perp[bucket_index].y;
+  for (int i = 0; i < 4; ++i) {
+    uint2 cur_bucket_index = make_uint2(bucket_index.x, bucket_index.y+i);
+    minzpmin = min(z_perp[cur_bucket_index].x, minzpmin);
+    maxzpmax = max(z_perp[cur_bucket_index].y, maxzpmax);
+  }
   float proj_dist = 2./image_dim.y * prd.t_hit*tan(fov/2.*M_PI/180.);
   float wvmax = 3.f;
   float alpha = 0.5;
-  float spp_term1 = proj_dist * wvmax/z_perp[bucket_index].x + alpha;
-  float spp_term2 = 1+z_perp[bucket_index].y/z_perp[bucket_index].x;
+  float spp_term1 = proj_dist * wvmax/minzpmin + alpha;
+  float spp_term2 = 1+maxzpmax/minzpmin;
 
   float spp = spp_term1*spp_term1 * wvmax*wvmax * spp_term2*spp_term2;
 
@@ -489,7 +497,7 @@ RT_PROGRAM void display_camera() {
 
   output_buffer[launch_index] = make_color( direct_illum[launch_index]+indirect_illum[launch_index]);
   if (filter_indirect)
-    output_buffer[launch_index] = make_color( direct_illum[launch_index]+indirect_illum_filt[launch_index]);
+    output_buffer[launch_index] = make_color( direct_illum[launch_index]+indirect_illum_filt_int[launch_index]);
 
   if (view_mode) {
     uint2 bucket_index = make_uint2(launch_index.x, launch_index.y*4);
@@ -498,7 +506,7 @@ RT_PROGRAM void display_camera() {
     if (view_mode == 2) 
     {
       if (filter_indirect)
-        output_buffer[launch_index] = make_color( indirect_illum_filt[launch_index]);
+        output_buffer[launch_index] = make_color( indirect_illum_filt_int[launch_index]);
       else
         output_buffer[launch_index] = make_color( indirect_illum[launch_index]);
     }
@@ -508,8 +516,12 @@ RT_PROGRAM void display_camera() {
       output_buffer[launch_index] = make_color( make_float3(use_filter[launch_index]) );
     if (view_mode == 5 || view_mode == 6 || view_mode == 7 || view_mode == 8) {
       int sep_ind = view_mode-5;
-      output_buffer[launch_index] = make_color( indirect_illum_sep[make_uint2(
-            launch_index.x, launch_index.y*4+sep_ind )]);
+      if (filter_indirect)
+        output_buffer[launch_index] = make_color( indirect_illum_filt[make_uint2(
+              launch_index.x, launch_index.y*4+sep_ind )]);
+      else
+        output_buffer[launch_index] = make_color( indirect_illum_sep[make_uint2(
+              launch_index.x, launch_index.y*4+sep_ind )]);
     }
     if (view_mode == 9 || view_mode == 10 || view_mode == 11 || view_mode == 12) {
       int sep_ind = view_mode-9;
@@ -535,7 +547,8 @@ __device__ __inline__ void indirectFilter(
     int i,
     int j,
     const size_t2& buf_size,
-    unsigned int pass)
+    unsigned int pass,
+    unsigned int bucket)
 {
   const float dist_scale_threshold = 10.0f;
   const float dist_threshold = 100.0f;
@@ -543,10 +556,10 @@ __device__ __inline__ void indirectFilter(
 
   if (i > 0 && i < buf_size.x && j > 0 && j < buf_size.y) {
     uint2 target_index = make_uint2(i,j);
-    float3 target_indirect = indirect_illum[target_index];
+    uint2 target_bucket_index = make_uint2(i,4*j+bucket);
+    float3 target_indirect = indirect_illum_sep[target_bucket_index];
     if (pass == 1)
-      target_indirect = indirect_illum_blur1d[target_index];
-    uint2 target_bucket_index = make_uint2(target_index.x, target_index.y*4);
+      target_indirect = indirect_illum_blur1d[target_bucket_index];
     float target_zpmin = z_perp[target_bucket_index].x;
     float3 target_n = n[target_index];
     //bool use_filt = use_filt_indirect[target_index];
@@ -575,56 +588,68 @@ __device__ __inline__ void indirectFilter(
 
 RT_PROGRAM void indirect_filter_first_pass()
 {
-  float3 cur_indirect = indirect_illum[launch_index];
   uint2 bucket_index = make_uint2(launch_index.x, launch_index.y*4);
-  float cur_zpmin = z_perp[bucket_index].x;
-  size_t2 buf_size = indirect_illum.size();
-  float3 blurred_indirect = cur_indirect;
-
-  float3 blurred_indirect_sum = make_float3(0.);
-  float sum_weight = 0.f;
-
-  float3 cur_world_loc = world_loc[launch_index];
-  float3 cur_n = n[launch_index];
-
-  for (int i = -pixel_radius.x; i < pixel_radius.x; i++) 
+  for(int bucket = 0; bucket < 4; ++bucket)
   {
-    if (use_filter[launch_index]) 
-      indirectFilter(blurred_indirect_sum, sum_weight,
-          cur_world_loc, cur_n, cur_zpmin, launch_index.x+i, launch_index.y,
-          buf_size, 0);
-  }
+    uint2 cur_bucket_index = make_uint2(bucket_index.x, bucket_index.y+bucket);
+    float3 cur_indirect = indirect_illum_sep[cur_bucket_index];
+    float cur_zpmin = z_perp[cur_bucket_index].x;
+    size_t2 buf_size = indirect_illum.size();
+    float3 blurred_indirect = cur_indirect;
 
-  if (sum_weight > 0.0001f)
-    blurred_indirect = blurred_indirect_sum / sum_weight;
-  indirect_illum_blur1d[launch_index] = blurred_indirect;
+    float3 blurred_indirect_sum = make_float3(0.);
+    float sum_weight = 0.f;
+
+    float3 cur_world_loc = world_loc[launch_index];
+    float3 cur_n = n[launch_index];
+
+    for (int i = -pixel_radius.x; i < pixel_radius.x; i++) 
+    {
+      if (use_filter[launch_index]) 
+        indirectFilter(blurred_indirect_sum, sum_weight,
+            cur_world_loc, cur_n, cur_zpmin, launch_index.x+i, launch_index.y,
+            buf_size, 0, bucket);
+    }
+
+    if (sum_weight > 0.0001f)
+      blurred_indirect = blurred_indirect_sum / sum_weight;
+    indirect_illum_blur1d[cur_bucket_index] = blurred_indirect;
+  }
 }
 
 RT_PROGRAM void indirect_filter_second_pass()
 {
-  float3 cur_indirect = indirect_illum_blur1d[launch_index];
   uint2 bucket_index = make_uint2(launch_index.x, launch_index.y*4);
-  float cur_zpmin = z_perp[bucket_index].x;
-  size_t2 buf_size = indirect_illum_blur1d.size();
-  float3 blurred_indirect = cur_indirect;
-
-  float3 blurred_indirect_sum = make_float3(0.);
-  float sum_weight = 0.f;
-
-  float3 cur_world_loc = world_loc[launch_index];
-  float3 cur_n = n[launch_index];
-
-  for (int j = -pixel_radius.y; j < pixel_radius.y; j++) 
+  float3 avg_indirect = make_float3(0);
+  for(int bucket = 0; bucket < 4; ++bucket)
   {
-    if (use_filter[launch_index]) 
-      indirectFilter(blurred_indirect_sum, sum_weight,
-          cur_world_loc, cur_n, cur_zpmin, launch_index.x, launch_index.y+j,
-          buf_size, 1);
-  }
+    uint2 cur_bucket_index = make_uint2(bucket_index.x, bucket_index.y+bucket);
+    float3 cur_indirect = indirect_illum_sep[cur_bucket_index];
+    float cur_zpmin = z_perp[bucket_index].x;
+    size_t2 buf_size = indirect_illum_blur1d.size();
+    float3 blurred_indirect = cur_indirect;
 
-  if (sum_weight > 0.0001f)
-    blurred_indirect = blurred_indirect_sum / sum_weight;
-  indirect_illum_filt[launch_index] = blurred_indirect;
+    float3 blurred_indirect_sum = make_float3(0.);
+    float sum_weight = 0.f;
+
+    float3 cur_world_loc = world_loc[launch_index];
+    float3 cur_n = n[launch_index];
+
+    for (int j = -pixel_radius.y; j < pixel_radius.y; j++) 
+    {
+      if (use_filter[launch_index]) 
+        indirectFilter(blurred_indirect_sum, sum_weight,
+            cur_world_loc, cur_n, cur_zpmin, launch_index.x, launch_index.y+j,
+            buf_size, 1, bucket);
+    }
+
+    if (sum_weight > 0.0001f)
+      blurred_indirect = blurred_indirect_sum / sum_weight;
+    indirect_illum_filt[cur_bucket_index] = blurred_indirect;
+    avg_indirect += blurred_indirect;
+  }
+  avg_indirect /= 4;
+  indirect_illum_filt_int[launch_index] = avg_indirect;
 }
 
 //

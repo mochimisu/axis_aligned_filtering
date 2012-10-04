@@ -199,11 +199,14 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   Buffer indirect_illum_accum = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT4, _width, _height*4);
   m_context["indirect_illum_accum"]->set(indirect_illum_accum);
 
-  Buffer indirect_illum_blur1d = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
+  Buffer indirect_illum_blur1d = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height*4);
   m_context["indirect_illum_blur1d"]->set(indirect_illum_blur1d);
 
-  Buffer indirect_illum_filt = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
+  Buffer indirect_illum_filt = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height*4);
   m_context["indirect_illum_filt"]->set(indirect_illum_filt);
+
+  Buffer indirect_illum_filt_int = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
+  m_context["indirect_illum_filt_int"]->set(indirect_illum_filt_int);
 
   Buffer zpmin = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT2, _width, _height*4);
   m_context["z_perp"]->set(zpmin);
