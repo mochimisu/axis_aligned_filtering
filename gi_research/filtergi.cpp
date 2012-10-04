@@ -95,7 +95,7 @@ private:
   uint _filter_indirect;
   uint _blur_wxf;
   uint _err_vis;
-  uint _view_mode;
+  int _view_mode;
   uint _lin_sep_blur;
 
   uint _normal_rpp;
@@ -138,7 +138,7 @@ private:
 FilterGI* _scene;
 int output_num = 0;
 
-int max_spp = 500;//250;
+uint max_spp = 100;//250;
 
 void FilterGI::initScene( InitialCameraData& camera_data )
 {
@@ -164,7 +164,7 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   m_context["scene_epsilon"]->setFloat( 1.e-3f );
   m_context["importance_cutoff"]->setFloat( 0.01f );
   m_context["ambient_light_color"]->setFloat( 0.31f, 0.33f, 0.28f );
-  m_context["max_spp"]->setInt(max_spp);
+  m_context["max_spp"]->setUint(max_spp);
   m_context["image_dim"]->setUint(width, height);
   m_context["fov"]->setFloat(fov);
 
@@ -661,7 +661,7 @@ void FilterGI::resetAccumulation()
 
 bool FilterGI::keyPressed(unsigned char key, int x, int y) {
   float delta = 0.5f;
-  const unsigned int num_view_modes = 13;
+  const int num_view_modes = 14;
 
   Buffer spp;
   switch(key) {
@@ -869,6 +869,8 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
       _view_mode = (_view_mode-1)%num_view_modes;
     else
       _view_mode = (_view_mode+1)%num_view_modes;
+    if (_view_mode < 0)
+      _view_mode += num_view_modes;
     m_context["view_mode"]->setUint(_view_mode);
     switch(_view_mode) {
     case 0:
@@ -881,7 +883,7 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
       std::cout << "View mode: Indirect only" << std::endl;
       break;
     case 3:
-      std::cout << "View mode: Z Perpendicular (min)" << std::endl;
+      std::cout << "View mode: SPP" << std::endl;
       break;
     case 4:
       std::cout << "View mode: Pixels using filter" << std::endl;
@@ -898,6 +900,10 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
     case 12:
       std::cout << "View mode: Z Perpendicular (min) bucket " << (_view_mode-9) << std::endl;
       break;
+    case 13:
+      std::cout << "View mode: converged pixels" << std::endl;
+      break;
+
     default:
       std::cout << "View mode: Unknown" << std::endl;
       break;

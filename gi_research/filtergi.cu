@@ -365,7 +365,7 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
   int cur_spp = indirect_spp[launch_index];
   int target_spp = target_indirect_spp[launch_index];
 
-  if (cur_spp > target_spp)
+  if (cur_spp > target_spp || cur_spp > max_spp)
     return;
   indirect_spp[launch_index] += spp_sqrt*spp_sqrt;
 
@@ -516,6 +516,9 @@ RT_PROGRAM void display_camera() {
       output_buffer[launch_index] = make_color( heatMap(z_perp[make_uint2(
               bucket_index.x, bucket_index.y+sep_ind)].x/200.));
     }
+    if (view_mode == 13)
+      output_buffer[launch_index] = make_color( make_float3(
+            indirect_spp[launch_index] > target_indirect_spp[launch_index]) );
     //filt radius = 1/zpmin
     //spp
   }
