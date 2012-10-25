@@ -211,10 +211,10 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   Buffer zpmin = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT2, _width, _height*4);
   m_context["z_perp"]->set(zpmin);
 
-  Buffer indirect_spp = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT, RT_FORMAT_FLOAT, _width, _height);
+  Buffer indirect_spp = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT, RT_FORMAT_FLOAT, _width, _height*4);
   m_context["indirect_spp"]->set(indirect_spp);
 
-  Buffer target_indirect_spp = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT, RT_FORMAT_FLOAT, _width, _height);
+  Buffer target_indirect_spp = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT, RT_FORMAT_FLOAT, _width, _height*4);
   m_context["target_indirect_spp"]->set(target_indirect_spp);
 
   Buffer use_filter = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_UNSIGNED_BYTE, _width, _height);
@@ -656,7 +656,7 @@ void FilterGI::resetAccumulation()
 
 bool FilterGI::keyPressed(unsigned char key, int x, int y) {
   float delta = 0.5f;
-  const int num_view_modes = 14;
+  const int num_view_modes = 22;
 
   Buffer spp;
   switch(key) {
@@ -915,6 +915,21 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
       break;
     case 13:
       std::cout << "View mode: converged pixels" << std::endl;
+      break;
+      
+    case 14:
+    case 15:
+    case 16:
+    case 17:
+      std::cout << "View mode: Target SPP bucket " << (_view_mode-14) << std::endl;
+      break;
+
+
+    case 18:
+    case 19:
+    case 20:
+    case 21:
+      std::cout << "View mode: SPP bucket " << (_view_mode-18) << std::endl;
       break;
 
     default:

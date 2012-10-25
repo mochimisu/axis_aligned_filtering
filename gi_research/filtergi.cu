@@ -208,11 +208,13 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
       indirect_illum_accum[cur_bucket_index] = make_float4(0);
       indirect_illum_sep[cur_bucket_index] = make_float3(0,0,0);
       z_perp[cur_bucket_index] = make_float2(100000000,0);
+      indirect_spp[cur_bucket_index] = 0;
+      target_indirect_spp[cur_bucket_index] = 0;
     }
 
     use_filter[launch_index] = false;
-    indirect_spp[launch_index] = 0;
-    target_indirect_spp[launch_index] = 0;
+    //indirect_spp[launch_index] = 0;
+    //target_indirect_spp[launch_index] = 0;
     indirect_illum[launch_index] = make_float3(0);
     image_Kd[launch_index] = make_float3(0);
   }
@@ -332,6 +334,9 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
     
     z_perp[cur_bucket_index].x = min(z_perp[cur_bucket_index].x, zpmin[i]);
     z_perp[cur_bucket_index].y = max(z_perp[cur_bucket_index].y, zpmax[i]);
+
+    target_indirect_spp[cur_bucket_index] = 0;
+    indirect_spp[cur_bucket_index] = init_ind_spp_sqrt/2;
   }
   if (indirect_illum_num > 0.01)
     indirect_illum[launch_index] = indirect_illum_unavg/indirect_illum_num;
@@ -346,23 +351,23 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
   
   // SPP
   //assuming 1:1 aspect
-  float minzpmin = z_perp[bucket_index].x;
-  float maxzpmax = z_perp[bucket_index].y;
   for (int i = 0; i < 4; ++i) {
     uint2 cur_bucket_index = make_uint2(bucket_index.x, bucket_index.y+i);
-    minzpmin = min(z_perp[cur_bucket_index].x, minzpmin);
-    maxzpmax = max(z_perp[cur_bucket_index].y, maxzpmax);
+
+    float zpmin = z_perp[cur_bucket_index].x;
+    float zpmax = z_perp[cur_bucket_index].y;
+
+    float proj_dist = 2./image_dim.y * prd.t_hit*tan(fov/2.*M_PI/180.);
+    float wvmax = 3.f;
+    float alpha = 0.5;
+    float spp_term1 = proj_dist * wvmax/zpmin + alpha;
+    float spp_term2 = 1+zpmax/zpmin;
+
+    float spp = spp_term1*spp_term1 * wvmax*wvmax * spp_term2*spp_term2;
+
+    target_indirect_spp[cur_bucket_index] = spp;
+
   }
-  float proj_dist = 2./image_dim.y * prd.t_hit*tan(fov/2.*M_PI/180.);
-  float wvmax = 3.f;
-  float alpha = 0.5;
-  float spp_term1 = proj_dist * wvmax/minzpmin + alpha;
-  float spp_term2 = 1+maxzpmax/minzpmin;
-
-  float spp = spp_term1*spp_term1 * wvmax*wvmax * spp_term2*spp_term2;
-
-  target_indirect_spp[launch_index] = spp;
-  indirect_spp[launch_index] = init_ind_spp_sqrt * init_ind_spp_sqrt;
 }
 
 RT_PROGRAM void pinhole_camera_continued_sample() {
@@ -370,12 +375,12 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
   float3 cur_n = n[launch_index];
 
   int spp_sqrt = 4;
-  int cur_spp = indirect_spp[launch_index];
-  int target_spp = target_indirect_spp[launch_index];
+  //int cur_spp = indirect_spp[launch_index];
+  //int target_spp = target_indirect_spp[launch_index];
 
-  if (cur_spp > target_spp || cur_spp > max_spp)
-    return;
-  indirect_spp[launch_index] += spp_sqrt*spp_sqrt;
+  //if (cur_spp > target_spp || cur_spp > max_spp)
+  //  return;
+  //indirect_spp[launch_index] += spp_sqrt*spp_sqrt;
 
   
   uint2 seed = indirect_rng_seeds[launch_index];
@@ -399,56 +404,66 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
   };
   uint2 bucket_index = make_uint2(launch_index.x, launch_index.y*4);
 
-  for(int i=0; i<spp_sqrt; ++i) {
+  for(int i=0; i<2; ++i) {
     seed.x = rot_seed(seed.x, i);
-    sample.x = (rnd(seed.x)+((float)i))/spp_sqrt;
-    if(i > spp_sqrt/2-1)
+    if(i > 0)
       xbucket = 1;
     ybucket = 0;
-    for(int j=0; j<spp_sqrt; ++j) {
+    for(int j=0; j<2; ++j) {
       seed.y = rot_seed(seed.y, j);
-      sample.y = (rnd(seed.y)+((float)j))/spp_sqrt;
-      if(j > spp_sqrt/2-1)
+      if(j > 0)
         ybucket = 1;
       totbucket = 2*xbucket+ybucket;
-      //float2 sample = make_float2( rnd(seed.x), rnd(seed.y) );
-      sampleUnitHemisphere( sample, u,v,w, sampleDir);
+      //int spp_hemi = indirect_spp[make_uint2(bucket_index.x, bucket_index.y+totbucket)];
+      int spp_hemi = 4;
+      if (indirect_spp[make_uint2(bucket_index.x, bucket_index.y+totbucket)] >
+          target_indirect_spp[make_uint2(bucket_index.x, bucket_index.y+totbucket)])
+        spp_hemi = 0;
+      for(int k=0; k<spp_hemi; ++k)
+      {
+        sample.x = (rnd(seed.x)+((float)k))/spp_hemi;
+        sample.y = (rnd(seed.y)+((float)k))/spp_hemi;
+        //float2 sample = make_float2( rnd(seed.x), rnd(seed.y) );
+        sampleUnitHemisphere( sample, u,v,w, sampleDir);
 
-      //construct indirect sample
-      PerRayData_indirect indirect_prd;
-      indirect_prd.hit = false;
-      indirect_prd.color = make_float3(0,0,0);
-      indirect_prd.distance = 100000000;
+        //construct indirect sample
+        PerRayData_indirect indirect_prd;
+        indirect_prd.hit = false;
+        indirect_prd.color = make_float3(0,0,0);
+        indirect_prd.distance = 100000000;
 
 
-      optix::Ray indirect_ray ( ray_origin, sampleDir, indirect_ray_type, 0.001);//scene_epsilon );
+        optix::Ray indirect_ray ( ray_origin, sampleDir, indirect_ray_type, 0.001);//scene_epsilon );
 
-      rtTrace(top_object, indirect_ray, indirect_prd);
-      uint2 cur_bucket_index = make_uint2(launch_index.x,launch_index.y*4 +totbucket);
+        rtTrace(top_object, indirect_ray, indirect_prd);
+        uint2 cur_bucket_index = make_uint2(launch_index.x,launch_index.y*4 +totbucket);
 
-      if(indirect_prd.hit) {
-        float3 zvec = indirect_prd.distance*sampleDir;
-        float cur_zpmin = sqrt(dot(zvec,zvec) - dot(cur_n,zvec));
-        zpmin[totbucket] = min(zpmin[totbucket], cur_zpmin);
-        zpmax[totbucket] = max(zpmax[totbucket], cur_zpmin);
-        //z_perp[cur_bucket_index].x = min(z_perp[cur_bucket_index].x, cur_zpmin);
-        //z_perp[cur_bucket_index].y = max(z_perp[cur_bucket_index].y, cur_zpmin);
-        // TODO: find actual zpmax
-        //prd_direct.zpmax = max(prd_direct.zpmax, cur_zpmin);
+        if(indirect_prd.hit) {
+          float3 zvec = indirect_prd.distance*sampleDir;
+          float cur_zpmin = sqrt(dot(zvec,zvec) - dot(cur_n,zvec));
+          zpmin[totbucket] = min(zpmin[totbucket], cur_zpmin);
+          zpmax[totbucket] = max(zpmax[totbucket], cur_zpmin);
+          //z_perp[cur_bucket_index].x = min(z_perp[cur_bucket_index].x, cur_zpmin);
+          //z_perp[cur_bucket_index].y = max(z_perp[cur_bucket_index].y, cur_zpmin);
+          // TODO: find actual zpmax
+          //prd_direct.zpmax = max(prd_direct.zpmax, cur_zpmin);
+        }
+
+        //nDl term needed if sampling by cosine density?
+        //float nDl = max(dot( ffnormal, normalize(sampleDir)), 0.f);
+        float3 cur_ind = image_Kd[launch_index] * indirect_prd.color;
+
+        //indirectColor += Kd * indirect_prd.color;
+
+
+        //TODO: optimize
+        cur_indirect_accum[totbucket].x += cur_ind.x;
+        cur_indirect_accum[totbucket].y += cur_ind.y;
+        cur_indirect_accum[totbucket].z += cur_ind.z;
+        cur_indirect_accum[totbucket].w += 1;
       }
 
-      //nDl term needed if sampling by cosine density?
-      //float nDl = max(dot( ffnormal, normalize(sampleDir)), 0.f);
-      float3 cur_ind = image_Kd[launch_index] * indirect_prd.color;
-
-      //indirectColor += Kd * indirect_prd.color;
-
-
-      //TODO: optimize
-      cur_indirect_accum[totbucket].x += cur_ind.x;
-      cur_indirect_accum[totbucket].y += cur_ind.y;
-      cur_indirect_accum[totbucket].z += cur_ind.z;
-      cur_indirect_accum[totbucket].w += 1;
+      indirect_spp[make_uint2(bucket_index.x, bucket_index.y+totbucket)] += spp_hemi;
       
     }
   }
@@ -531,6 +546,16 @@ RT_PROGRAM void display_camera() {
     if (view_mode == 13)
       output_buffer[launch_index] = make_color( make_float3(
             indirect_spp[launch_index] > target_indirect_spp[launch_index]) );
+    if (view_mode == 14 || view_mode == 15 || view_mode == 16 || view_mode == 17) {
+      int sep_ind = view_mode-14;
+      output_buffer[launch_index] = make_color( heatMap( target_indirect_spp[make_uint2(
+              bucket_index.x, bucket_index.y+sep_ind)]/1000. ));
+    }
+    if (view_mode == 18 || view_mode == 19 || view_mode == 20 || view_mode == 21) {
+      int sep_ind = view_mode-18;
+      output_buffer[launch_index] = make_color( heatMap( indirect_spp[make_uint2(
+              bucket_index.x, bucket_index.y+sep_ind)]/1000. ));
+    }
     //filt radius = 1/zpmin
     //spp
   }
