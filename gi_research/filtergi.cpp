@@ -274,7 +274,7 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   _filter_indirect = 1;
   m_context["filter_indirect"]->setUint(_filter_indirect);
 
-  _view_mode = 0;
+  _view_mode = 2;
   m_context["view_mode"]->setUint(_view_mode);
 
 
@@ -539,12 +539,16 @@ light_buffer->unmap();
   //std::cout << "Number of passes to resample: " << num_resample << std::endl;
 
   //Initial 16 Samples
+    m_context->launch( 0, static_cast<unsigned int>(buffer_width),
+      static_cast<unsigned int>(buffer_height) );
+    /*
   if (_frame_number == 0)
     m_context->launch( 0, static_cast<unsigned int>(buffer_width),
       static_cast<unsigned int>(buffer_height) );
   else
     m_context->launch( 4, static_cast<unsigned int>(buffer_width),
       static_cast<unsigned int>(buffer_height) );
+      */
   //filter indirect
   m_context->launch( 2, static_cast<unsigned int>(buffer_width),
     static_cast<unsigned int>(buffer_height) );
