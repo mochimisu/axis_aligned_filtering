@@ -321,7 +321,7 @@ if(WIN32)
     set(bit_dest "")
   endif()
   foreach(config ${CMAKE_CONFIGURATION_TYPES})
-    get_target_property(loc cook ${config}_LOCATION)
+    get_target_property(loc filtergi ${config}_LOCATION)
     if(loc)
       # A little helper function
       function(copy_dll lib)
