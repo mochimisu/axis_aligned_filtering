@@ -171,7 +171,8 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 # Locate the NVRT distribution.  Search the SDK first, then look in the system.
-set(OptiX_INSTALL_DIR "${CMAKE_SOURCE_DIR}/../" CACHE PATH "Path to OptiX installed location.")
+#set(OptiX_INSTALL_DIR "${CMAKE_SOURCE_DIR}/../" CACHE PATH "Path to OptiX installed location.")
+set(OptiX_INSTALL_DIR "/Developer/OptiX30b1/" CACHE PATH "Path to OptiX installed location.")
 
 # Search for the OptiX libraries and include files.
 find_package(OptiX REQUIRED)
