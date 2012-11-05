@@ -131,6 +131,44 @@ __device__ __inline__ float2 randomGauss(float center, float std_dev, float2 sam
   return result;
 }
 
+//omega_v_max for phong brdf
+__device__ __inline__ float glossy_blim(float3& r, float3& c, float m){
+float vc = tan(acos(dot(r,c))); //r, c must be unit vectors
+float        p00 =       2.017;
+float        p10 =      0.2575;
+float        p01 =       0.537;
+float        p20 =    -0.05937;
+float        p11 =     -0.1894;
+float        p02 =    -0.03605;
+float        p30 =    0.005778;
+float        p21 =     0.03843;
+float        p12 =    0.001897;
+float        p03 =    0.001631;
+float        p40 =  -0.0002033;
+float        p31 =   -0.003547;
+float        p22 =  -0.0002067;
+float        p13 = -1.068e-005;
+float        p04 = -3.413e-005;
+float        p41 =   0.0001219;
+float        p32 =  7.471e-006;
+float        p23 =  6.913e-007;
+float        p14 = -7.882e-009;
+float        p05 =  2.601e-007;
+
+float vc2 = vc*vc;
+float vc3 = vc2*vc;
+float vc4 = vc2*vc2;
+float m2 = m*m;
+float m3 = m2*m;
+float m4 = m2*m2;
+float m5 = m4*m;
+
+return (p00 + p10*vc + p01*m + p20*vc2 + p11*vc*m + p02*m2 + p30*vc3 
+    + p21*vc2*m + p12*vc*m2 + p03*m3 + p40*vc4 + p31*vc3*m + p22*vc2*m2  
+    + p13*vc*m3 + p04*m4 + p41*vc4*m + p32*vc3*m2 + p23*vc2*m3
+    + p14*vc*m4 + p05*m5);
+}
+
 //
 // Pinhole camera implementation
 //
@@ -160,6 +198,7 @@ rtBuffer<int, 2>                  indirect_spp;
 rtBuffer<int, 2>                  target_indirect_spp;
 
 rtBuffer<float3, 2>               image_Kd;
+rtBuffer<float, 2>                omega_v_max;
 
 rtBuffer<BasicLight>        lights;
 
@@ -188,6 +227,7 @@ rtDeclareVariable(float,          fov, , );
 
 //Random direction buffer
 rtBuffer<uint2, 2> indirect_rng_seeds;
+
 
 RT_PROGRAM void pinhole_camera_initial_sample() {
   // Find direction to shoot ray in
@@ -442,7 +482,7 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
           indirect_prd.distance = 100000000;
 
 
-          optix::Ray indirect_ray ( ray_origin, sampleDir, indirect_ray_type, 0.001);//scene_epsilon );
+          optix::Ray indirect_ray ( ray_origin, sampleDir, indirect_ray_type, 0.01);//scene_epsilon );
 
           rtTrace(top_object, indirect_ray, indirect_prd);
 
@@ -534,7 +574,7 @@ RT_PROGRAM void display_camera() {
         output_buffer[launch_index] = make_color( indirect_illum[launch_index]);
     }
     if (view_mode == 3)
-      output_buffer[launch_index] = make_color( heatMap( target_indirect_spp[launch_index]/1000. ));
+      output_buffer[launch_index] = make_color( heatMap( omega_v_max[launch_index]/10. ));
     if (view_mode == 4)
       output_buffer[launch_index] = make_color( make_float3(use_filter[launch_index]) );
     if (view_mode == 5 || view_mode == 6 || view_mode == 7 || view_mode == 8) {
@@ -787,15 +827,20 @@ RT_PROGRAM void closest_hit_direct()
   float nDl = max(dot( ffnormal, L ),0.0f);
   float3 H = normalize(L - ray.direction);
   float nDh = max(dot( ffnormal, H ),0.0f);
+  float3 to_camera = -ray.direction;
   //temporary - white light
   float3 Lc = make_float3(1,1,1);
   color += Kd * nDl * Lc;// * strength;
-  if (nDh > 0)
+  omega_v_max[launch_index] = 2;
+  if (nDh > 0 && Ks.x+Ks.y+Ks.z > 0)
+  {
     color += Ks * pow(nDh, phong_exp);
+    omega_v_max[launch_index] = glossy_blim(H, to_camera, phong_exp);
+  }
   prd_direct.color = color;
 
   //shadow
-  optix::Ray shadow_ray ( hit_point, L, shadow_ray_type, 0.001);
+  optix::Ray shadow_ray ( hit_point, L, shadow_ray_type, 0.01);
 
   PerRayData_shadow shadow_prd;
   shadow_prd.hit = false;
@@ -803,6 +848,8 @@ RT_PROGRAM void closest_hit_direct()
   if (shadow_prd.hit &&( shadow_prd.distance*shadow_prd.distance) < dot(to_light,to_light)) {
     prd_direct.color = make_float3(0);
   }
+
+  //omega_v_max calculation
 }
 
 

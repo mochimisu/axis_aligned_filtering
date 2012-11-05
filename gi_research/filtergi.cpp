@@ -220,6 +220,9 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   Buffer use_filter = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_UNSIGNED_BYTE, _width, _height);
   m_context["use_filter"]->set(use_filter);
 
+  Buffer omega_v_max = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height);
+  m_context["omega_v_max"]->set(omega_v_max);
+
   // gauss values
   Buffer gauss_lookup = m_context->createBuffer( RT_BUFFER_INPUT, RT_FORMAT_FLOAT, 65);
   m_context["gaussian_lookup"]->set( gauss_lookup );
@@ -274,7 +277,7 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   _filter_indirect = 1;
   m_context["filter_indirect"]->setUint(_filter_indirect);
 
-  _view_mode = 2;
+  _view_mode = 3;
   m_context["view_mode"]->setUint(_view_mode);
 
 
@@ -896,7 +899,7 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
       std::cout << "View mode: Indirect only" << std::endl;
       break;
     case 3:
-      std::cout << "View mode: SPP" << std::endl;
+      std::cout << "View mode: Omega_v_max" << std::endl;
       break;
     case 4:
       std::cout << "View mode: Pixels using filter" << std::endl;
@@ -1110,6 +1113,17 @@ void FilterGI::createGeometry()
   diffuse->setClosestHitProgram( 0, diffuse_ch );
   diffuse->setClosestHitProgram( 1, diffuse_ah );
   diffuse->setAnyHitProgram( 2, shadow_hit );
+  diffuse["Ks"]->setFloat( 0.0f, 0.0f, 0.0f );
+  diffuse["phong_exp"]->setFloat( 10.0f );
+
+  Material specular = m_context->createMaterial();
+  specular->setClosestHitProgram( 0, closest_hit );
+  specular->setClosestHitProgram( 1, any_hit );
+  specular->setAnyHitProgram( 2, shadow_hit );
+  specular["Kd"]->setFloat(0.4f, 0.4f, 0.4f);
+  specular["Ks"]->setFloat(0.8f, 0.8f, 0.8f);
+  specular["phong_exp"]->setFloat( 10.f );
+  
 
   //Material diffuse_light = m_context->createMaterial();
   //Program diffuse_em = m_context->createProgramFromPTXFile( ptxpath( "path_tracer", "path_tracer.cu" ), "diffuseEmitter" );
@@ -1124,6 +1138,8 @@ void FilterGI::createGeometry()
   std::vector<GeometryInstance> gis;
 
   const float3 white = make_float3( 0.8f, 0.8f, 0.8f );
+  const float3 halfwhite = make_float3( 0.4f, 0.4f, 0.4f );
+  const float3 black = make_float3( 0.f, 0.f, 0.f );
   const float3 green = make_float3( 0.05f, 0.8f, 0.05f );
   const float3 red   = make_float3( 0.8f, 0.05f, 0.05f );
   const float3 light_em = make_float3( 15.0f, 15.0f, 5.0f );
@@ -1158,6 +1174,7 @@ void FilterGI::createGeometry()
                                       make_float3( 0.0f, 548.8f, 0.0f ) ) );
   setMaterial(gis.back(), diffuse, "Kd", red);
 
+  /*
   // Short block
   gis.push_back( createParallelogram( make_float3( 130.0f, 165.0f, 65.0f),
                                       make_float3( -48.0f, 0.0f, 160.0f),
@@ -1184,28 +1201,37 @@ void FilterGI::createGeometry()
   gis.push_back( createParallelogram( make_float3( 423.0f, 330.0f, 247.0f),
                                       make_float3( -158.0f, 0.0f, 49.0f),
                                       make_float3( 49.0f, 0.0f, 159.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
+  setMaterial(gis.back(), diffuse, "Kd", black);
+  setMaterial(gis.back(), diffuse, "Ks", halfwhite);
   gis.push_back( createParallelogram( make_float3( 423.0f, 0.0f, 247.0f),
                                       make_float3( 0.0f, 330.0f, 0.0f),
                                       make_float3( 49.0f, 0.0f, 159.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
+  setMaterial(gis.back(), diffuse, "Kd", black);
+  setMaterial(gis.back(), diffuse, "Ks", halfwhite);
   gis.push_back( createParallelogram( make_float3( 472.0f, 0.0f, 406.0f),
                                       make_float3( 0.0f, 330.0f, 0.0f),
                                       make_float3( -158.0f, 0.0f, 50.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
+  setMaterial(gis.back(), diffuse, "Kd", black);
+  setMaterial(gis.back(), diffuse, "Ks", halfwhite);
   gis.push_back( createParallelogram( make_float3( 314.0f, 0.0f, 456.0f),
                                       make_float3( 0.0f, 330.0f, 0.0f),
                                       make_float3( -49.0f, 0.0f, -160.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
+  setMaterial(gis.back(), diffuse, "Kd", black);
+  setMaterial(gis.back(), diffuse, "Ks", halfwhite);
   gis.push_back( createParallelogram( make_float3( 265.0f, 0.0f, 296.0f),
                                       make_float3( 0.0f, 330.0f, 0.0f),
                                       make_float3( 158.0f, 0.0f, -49.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
+  setMaterial(gis.back(), diffuse, "Kd", black);
+  setMaterial(gis.back(), diffuse, "Ks", halfwhite);
+
+  */
 
   // Create shadow group (no light)
+  /*
   GeometryGroup shadow_group = m_context->createGeometryGroup(gis.begin(), gis.end());
   shadow_group->setAcceleration( m_context->createAcceleration("Bvh","Bvh") );
   m_context["top_shadower"]->set( shadow_group );
+  */
 
   // Light
   //gis.push_back( createParallelogram( make_float3( 343.0f, 548.6f, 227.0f),
@@ -1215,8 +1241,15 @@ void FilterGI::createGeometry()
 
   // Create geometry group
   GeometryGroup geometry_group = m_context->createGeometryGroup(gis.begin(), gis.end());
+
+  Matrix4x4 dragon_xform = Matrix4x4::translate(make_float3(250,200,300)) 
+    * Matrix4x4::scale(make_float3(30,30,30));
+  ObjLoader * dragon_loader = new ObjLoader( texpath("dragon.obj").c_str(), m_context, geometry_group, specular );
+  dragon_loader->load(dragon_xform);
   geometry_group->setAcceleration( m_context->createAcceleration("Bvh","Bvh") );
   m_context["top_object"]->set( geometry_group );
+  m_context["top_shadower"]->set( geometry_group );
+
 
 
   /*
