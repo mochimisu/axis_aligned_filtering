@@ -191,6 +191,12 @@ void FilterGI::initScene( InitialCameraData& camera_data )
 
   Buffer image_Kd = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
   m_context["image_Kd"]->set(image_Kd);
+  Buffer image_Ks = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
+  m_context["image_Ks"]->set(image_Ks);
+  Buffer image_phong_exp = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height);
+  m_context["image_phong_exp"]->set(image_phong_exp);
+  Buffer image_normal = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height);
+  m_context["image_normal"]->set(image_normal);
 
   Buffer indirect_illum_sep = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT3, _width, _height*4);
   m_context["indirect_illum_sep"]->set(indirect_illum_sep);
@@ -277,7 +283,7 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   _filter_indirect = 1;
   m_context["filter_indirect"]->setUint(_filter_indirect);
 
-  _view_mode = 3;
+  _view_mode = 2;
   m_context["view_mode"]->setUint(_view_mode);
 
 
@@ -1114,7 +1120,7 @@ void FilterGI::createGeometry()
   diffuse->setClosestHitProgram( 1, diffuse_ah );
   diffuse->setAnyHitProgram( 2, shadow_hit );
   diffuse["Ks"]->setFloat( 0.0f, 0.0f, 0.0f );
-  diffuse["phong_exp"]->setFloat( 10.0f );
+  diffuse["phong_exp"]->setFloat( 1.0f );
 
   Material specular = m_context->createMaterial();
   specular->setClosestHitProgram( 0, closest_hit );

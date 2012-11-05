@@ -83,6 +83,8 @@ struct PerRayData_direct
   float zpmax;
   float3 world_loc;
   float3 Kd;
+  float3 Ks;
+  float phong_exp;
 };
 
 struct PerRayData_shadow
