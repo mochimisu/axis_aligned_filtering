@@ -1128,6 +1128,7 @@ void FilterGI::createGeometry()
   specular->setAnyHitProgram( 2, shadow_hit );
   specular["Kd"]->setFloat(0.4f, 0.4f, 0.4f);
   specular["Ks"]->setFloat(0.8f, 0.8f, 0.8f);
+  //specular["Ks"]->setFloat( 0.0f, 0.0f, 0.0f );
   specular["phong_exp"]->setFloat( 10.f );
   
 

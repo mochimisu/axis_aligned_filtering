@@ -199,7 +199,6 @@ rtBuffer<int, 2>                  target_indirect_spp;
 
 rtBuffer<float3, 2>               image_Kd;
 rtBuffer<float3, 2>               image_Ks;
-rtBuffer<float3, 2>               image_normal;
 rtBuffer<float, 2>               image_phong_exp;
 rtBuffer<float, 2>                omega_v_max;
 
@@ -260,7 +259,6 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
     //target_indirect_spp[launch_index] = 0;
     indirect_illum[launch_index] = make_float3(0);
     image_Kd[launch_index] = make_float3(0);
-    image_normal[launch_index] = make_float3(0);
     image_Ks[launch_index] = make_float3(0);
     image_phong_exp[launch_index] = 0;
   }
@@ -282,7 +280,6 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
     return;
 
   image_Kd[launch_index ] =prd.Kd;
-  image_normal[launch_index ] =prd.n;
   image_Ks[launch_index ] =prd.Ks;
   image_phong_exp[launch_index ] =prd.phong_exp;
   world_loc[launch_index] = prd.world_loc;
@@ -354,12 +351,17 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
           //float nDl = max(dot( ffnormal, normalize(sampleDir)), 0.f);
 
           float3 H = normalize(sampleDir - ray.direction);
-          float nDh = max(dot( image_normal[launch_index], H ),0.0f);
-          float3 cur_ind = prd.Kd * indirect_prd.color;
-          
-          if (nDh > 0)
+          float nDh = max(dot( prd.n, H ),0.0f);
+          float nDl = max(dot( prd.n, sampleDir),0.f);
+          float3 cur_ind = make_float3(0);
+          if (nDl > 0.01)
           {
-            cur_ind += prd.Ks *indirect_prd.color* pow(nDh, prd.phong_exp);
+              cur_ind = prd.Kd * indirect_prd.color;
+              
+              if (nDh > 0.01)
+              {
+                cur_ind += prd.Ks *indirect_prd.color* pow(nDh, prd.phong_exp)/nDl;
+              }
           }
 
           //indirectColor += Kd * indirect_prd.color;
@@ -390,8 +392,9 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
       cur_indirect_accum[i].z);
     indirect_illum_accum[cur_bucket_index] += cur_indirect_accum[i];
     indirect_illum_sep[cur_bucket_index] = cur_indirect_illum_unavg/cur_indirect_accum[i].w;
-    indirect_illum_unavg += cur_indirect_illum_unavg;
-    indirect_illum_num += cur_indirect_accum[i].w;
+    indirect_illum_unavg += indirect_illum_sep[cur_bucket_index];
+    //indirect_illum_unavg += cur_indirect_illum_unavg;
+    //indirect_illum_num += cur_indirect_accum[i].w;
     
     z_perp[cur_bucket_index].x = min(z_perp[cur_bucket_index].x, zpmin[i]);
     z_perp[cur_bucket_index].y = max(z_perp[cur_bucket_index].y, zpmax[i]);
@@ -399,8 +402,9 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
     //target_indirect_spp[cur_bucket_index] = 0;
     //indirect_spp[cur_bucket_index] = init_ind_spp_sqrt/2;
   }
-  if (indirect_illum_num > 0.01)
-    indirect_illum[launch_index] = indirect_illum_unavg/indirect_illum_num;
+  //if (indirect_illum_num > 0.01)
+    //indirect_illum[launch_index] = indirect_illum_unavg/indirect_illum_num;
+    indirect_illum[launch_index] = indirect_illum_unavg/4;
   indirect_rng_seeds[launch_index] = seed;
 
 
@@ -481,6 +485,7 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
           target_indirect_spp[make_uint2(bucket_index.x, bucket_index.y+totbucket)])
         spp_hemi = 0;
       //spp_hemi = 4;
+      //spp_hemi = 2;
       uint2 cur_bucket_index = make_uint2(launch_index.x,launch_index.y*4 +totbucket);
       for(int a=0; a<spp_hemi; ++a)
       {
@@ -517,12 +522,15 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
 
           //nDl term needed if sampling by cosine density?
           //float nDl = max(dot( ffnormal, normalize(sampleDir)), 0.f);
-          float3 cur_ind = image_Kd[launch_index] * indirect_prd.color;          float3 H = normalize(sampleDir - ray.direction);
-          float nDh = max(dot( image_normal[launch_index], H ),0.0f);
-          
-          if (nDh > 0)
+          float3 H = normalize(sampleDir + (eye-ray_origin));
+          float nDh = max(dot( cur_n, H ),0.0f);          float nDl = max(dot( cur_n, sampleDir),0.f);
+          float3 cur_ind = make_float3(0);
+          if (nDl > 0.01)
           {
-          cur_ind += image_Ks[launch_index] *indirect_prd.color* pow(nDh, image_phong_exp[launch_index]);
+            cur_ind = image_Kd[launch_index] * indirect_prd.color;            if (nDh > 0.01)
+            {
+              cur_ind += image_Ks[launch_index] *indirect_prd.color* pow(nDh, image_phong_exp[launch_index])/nDl;
+            }
           }
 
           //indirectColor += Kd * indirect_prd.color;
@@ -547,26 +555,27 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
   for (int i = 0; i < 4; ++i)
   {
     uint2 cur_bucket_index = make_uint2(bucket_index.x, bucket_index.y+i);
-    float3 cur_indirect_illum_unavg = make_float3(
-      cur_indirect_accum[i].x,
-      cur_indirect_accum[i].y,
-      cur_indirect_accum[i].z);
-    indirect_illum_accum[cur_bucket_index] += cur_indirect_accum[i];
-    float3 cum_indirect_illum_unavg = make_float3(
-      indirect_illum_accum[cur_bucket_index].x,
-      indirect_illum_accum[cur_bucket_index].y,
-      indirect_illum_accum[cur_bucket_index].z);
-
-    indirect_illum_sep[cur_bucket_index] = cum_indirect_illum_unavg/indirect_illum_accum[cur_bucket_index].w;
-    indirect_illum_unavg += cum_indirect_illum_unavg;
-    indirect_illum_num += indirect_illum_accum[cur_bucket_index].w;
-    
+      float3 cur_indirect_illum_unavg = make_float3(
+        cur_indirect_accum[i].x,
+        cur_indirect_accum[i].y,
+        cur_indirect_accum[i].z);
+        indirect_illum_accum[cur_bucket_index] += cur_indirect_accum[i];
+      float3 cum_indirect_illum_unavg = make_float3(
+        indirect_illum_accum[cur_bucket_index].x,
+        indirect_illum_accum[cur_bucket_index].y,
+        indirect_illum_accum[cur_bucket_index].z);
+        indirect_illum_sep[cur_bucket_index] = cum_indirect_illum_unavg/indirect_illum_accum[cur_bucket_index].w;
     z_perp[cur_bucket_index].x = min(z_perp[cur_bucket_index].x, zpmin[i]);
     z_perp[cur_bucket_index].y = max(z_perp[cur_bucket_index].y, zpmax[i]);
+    //indirect_illum_unavg += cum_indirect_illum_unavg;
+    //indirect_illum_num += indirect_illum_accum[cur_bucket_index].w;
+    
+    indirect_illum_unavg += indirect_illum_sep[cur_bucket_index];
   }
   
-  if (indirect_illum_num > 0.01)
-    indirect_illum[launch_index] = indirect_illum_unavg/indirect_illum_num;
+  //if (indirect_illum_num > 0.01)
+    //indirect_illum[launch_index] = indirect_illum_unavg/indirect_illum_num;
+indirect_illum[launch_index] = indirect_illum_unavg/4;
   indirect_rng_seeds[launch_index] = seed;
 
 
@@ -633,7 +642,7 @@ RT_PROGRAM void display_camera() {
     //spp
   }
 
-  //output_buffer[launch_index] = make_color( world_loc[launch_index]/1000. );
+  //output_buffer[launch_index] = make_color( image_Ks[launch_index] );
 }
 
 __device__ __inline__ void indirectFilter( 
@@ -674,7 +683,7 @@ __device__ __inline__ void indirectFilter(
 
       if (euclidean_distsq < (dist_threshold*dist_threshold))
       {
-        float weight = gaussFilter(euclidean_distsq, 3/cur_zpmin);
+        float weight = gaussFilter(euclidean_distsq, omega_v_max[launch_index]/cur_zpmin);
 
         blurred_indirect_sum += weight * target_indirect;
         sum_weight += weight;
