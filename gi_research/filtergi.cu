@@ -484,10 +484,10 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
       //int spp_hemi = indirect_spp[make_uint2(bucket_index.x, bucket_index.y+totbucket)];
       int spp_hemi = 2;
       if (indirect_spp[make_uint2(bucket_index.x, bucket_index.y+totbucket)] >
-          target_indirect_spp[make_uint2(bucket_index.x, bucket_index.y+totbucket)])
+          min(max_spp, target_indirect_spp[make_uint2(bucket_index.x, bucket_index.y+totbucket)]))
         spp_hemi = 0;
       //spp_hemi = 4;
-      spp_hemi = 2;
+      //spp_hemi = 2;
       uint2 cur_bucket_index = make_uint2(launch_index.x,launch_index.y*4 +totbucket);
       for(int a=0; a<spp_hemi; ++a)
       {
@@ -663,9 +663,10 @@ __device__ __inline__ void indirectFilter(
     unsigned int pass,
     unsigned int bucket)
 {
-  const float dist_scale_threshold = 10.0f;
+  //const float dist_scale_threshold = 10.0f;
+  const float z_thres = .1f;
   const float dist_threshold = 100.0f;
-  const float angle_threshold = 10.0f * M_PI/180.0f;
+  const float angle_threshold = 0.1f * M_PI/180.0f;
 
   if (i > 0 && i < buf_size.x && j > 0 && j < buf_size.y) {
     uint2 target_index = make_uint2(i,j);
@@ -680,7 +681,9 @@ __device__ __inline__ void indirectFilter(
 
     if (use_filt 
         && acos(dot(target_n, cur_n)) < angle_threshold
-        && (1/target_zpmin - 1/cur_zpmin) < dist_scale_threshold
+        && abs((1./target_zpmin - 1./cur_zpmin)/(1./target_zpmin + 1./cur_zpmin)) < z_thres
+        //&& abs((target_zpmin - cur_zpmin)/(target_zpmin + cur_zpmin)) < z_thres
+        //&& (1/target_zpmin - 1/cur_zpmin) < dist_scale_threshold
         )
     {
       float3 target_loc = world_loc[target_index];
@@ -739,7 +742,7 @@ RT_PROGRAM void indirect_filter_second_pass()
   {
     uint2 cur_bucket_index = make_uint2(bucket_index.x, bucket_index.y+bucket);
     float3 cur_indirect = indirect_illum_sep[cur_bucket_index];
-    float cur_zpmin = z_perp[bucket_index].x;
+    float cur_zpmin = z_perp[cur_bucket_index].x;
     size_t2 buf_size = indirect_illum_blur1d.size();
     float3 blurred_indirect = cur_indirect;
 

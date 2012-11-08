@@ -811,14 +811,14 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
       int target_min_spp = 100000000.;
       int target_max_spp = 0;
       float target_avg_spp = 0;
-      int num_avg = 0;
-      int target_num_avg = 0;
+      float num_avg = 0;
+      float target_num_avg = 0;
 
       int* spp_arr = reinterpret_cast<int*>( spp->map() );
       int* target_spp_arr = reinterpret_cast<int*>( target_spp->map() );
       //char* valid_arr = reinterpret_cast<char*>( valid->map() );
 
-      for(unsigned int j = 0; j < _height; ++j ) {
+      for(unsigned int j = 0; j < _height*4; ++j ) {
         for(unsigned int i = 0; i < _width; ++i ) {
           //if (valid_arr[i+j*_width] > -1) {
             float cur_spp_val = spp_arr[i+j*_width];
@@ -827,13 +827,13 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
               min_spp = min(min_spp,cur_spp_val);
               max_spp = max(max_spp,cur_spp_val);
               avg_spp += cur_spp_val;
-              num_avg++;
+              num_avg+= 0.25;
             }
             if (cur_target_spp_val > -0.001) {
               target_min_spp = min(target_min_spp, cur_target_spp_val);
               target_max_spp = max(target_max_spp, cur_target_spp_val);
               target_avg_spp += cur_target_spp_val;
-              target_num_avg++;
+              target_num_avg+=0.25;
             }
           //} 
         }
@@ -1252,9 +1252,13 @@ void FilterGI::createGeometry()
 
   Matrix4x4 dragon_xform = Matrix4x4::translate(make_float3(250,200,300)) 
     * Matrix4x4::scale(make_float3(30,30,30));
+  Matrix4x4 elepham_xform = Matrix4x4::translate(make_float3(250,200,300)) 
+    * Matrix4x4::rotate(M_PI/2.,make_float3(0,-1,0))
+    * Matrix4x4::scale(make_float3(0.3,0.3,0.3));
   ObjLoader * dragon_loader = new ObjLoader( texpath("dragon.obj").c_str(), m_context, geometry_group, specular );
-  //ObjLoader * dragon_loader = new ObjLoader( texpath("elepham.obj").c_str(), m_context, geometry_group, specular );
   dragon_loader->load(dragon_xform);
+  //ObjLoader * dragon_loader = new ObjLoader( texpath("elepham.obj").c_str(), m_context, geometry_group, specular );
+  //dragon_loader->load(elepham_xform);
   geometry_group->setAcceleration( m_context->createAcceleration("Bvh","Bvh") );
   m_context["top_object"]->set( geometry_group );
   m_context["top_shadower"]->set( geometry_group );
