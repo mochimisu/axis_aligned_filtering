@@ -1127,7 +1127,8 @@ void FilterGI::createGeometry()
   specular->setClosestHitProgram( 1, any_hit );
   specular->setAnyHitProgram( 2, shadow_hit );
   specular["Kd"]->setFloat(0.4f, 0.4f, 0.4f);
-  specular["Ks"]->setFloat(0.8f, 0.8f, 0.8f);
+  specular["Ks"]->setFloat(1.f, 1.f, 1.f);
+  specular["Kd"]->setFloat(0.f, 0.f, 0.f);
   //specular["Ks"]->setFloat( 0.0f, 0.0f, 0.0f );
   specular["phong_exp"]->setFloat( 10.f );
   
@@ -1252,6 +1253,7 @@ void FilterGI::createGeometry()
   Matrix4x4 dragon_xform = Matrix4x4::translate(make_float3(250,200,300)) 
     * Matrix4x4::scale(make_float3(30,30,30));
   ObjLoader * dragon_loader = new ObjLoader( texpath("dragon.obj").c_str(), m_context, geometry_group, specular );
+  //ObjLoader * dragon_loader = new ObjLoader( texpath("elepham.obj").c_str(), m_context, geometry_group, specular );
   dragon_loader->load(dragon_xform);
   geometry_group->setAcceleration( m_context->createAcceleration("Bvh","Bvh") );
   m_context["top_object"]->set( geometry_group );

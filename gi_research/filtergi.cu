@@ -351,6 +351,8 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
           //float nDl = max(dot( ffnormal, normalize(sampleDir)), 0.f);
 
           float3 H = normalize(sampleDir - ray.direction);
+          float3 R = normalize( 2*prd.n*(dot(prd.n,sampleDir)) - sampleDir);
+          float nDr = max(dot( normalize(-ray.direction), R), 0.f);
           float nDh = max(dot( prd.n, H ),0.0f);
           float nDl = max(dot( prd.n, sampleDir),0.f);
           float3 cur_ind = make_float3(0);
@@ -358,9 +360,9 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
           {
               cur_ind = prd.Kd * indirect_prd.color;
               
-              if (nDh > 0.01)
+              if (nDl > 0.01)
               {
-                cur_ind += prd.Ks *indirect_prd.color* pow(nDh, prd.phong_exp)/nDl;
+                cur_ind += M_PI * prd.Ks *indirect_prd.color* pow(nDr, prd.phong_exp)/nDl;
               }
           }
 
@@ -485,7 +487,7 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
           target_indirect_spp[make_uint2(bucket_index.x, bucket_index.y+totbucket)])
         spp_hemi = 0;
       //spp_hemi = 4;
-      //spp_hemi = 2;
+      spp_hemi = 2;
       uint2 cur_bucket_index = make_uint2(launch_index.x,launch_index.y*4 +totbucket);
       for(int a=0; a<spp_hemi; ++a)
       {
@@ -522,14 +524,18 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
 
           //nDl term needed if sampling by cosine density?
           //float nDl = max(dot( ffnormal, normalize(sampleDir)), 0.f);
+          float3 R = normalize( 2*cur_n*dot(cur_n, sampleDir) - sampleDir);
+          float nDr = max(dot(normalize(eye-ray_origin), R), 0.f);
+
           float3 H = normalize(sampleDir + (eye-ray_origin));
           float nDh = max(dot( cur_n, H ),0.0f);          float nDl = max(dot( cur_n, sampleDir),0.f);
           float3 cur_ind = make_float3(0);
           if (nDl > 0.01)
           {
-            cur_ind = image_Kd[launch_index] * indirect_prd.color;            if (nDh > 0.01)
+            cur_ind = image_Kd[launch_index] * indirect_prd.color; 
+            if (nDr > 0.01)
             {
-              cur_ind += image_Ks[launch_index] *indirect_prd.color* pow(nDh, image_phong_exp[launch_index])/nDl;
+              cur_ind += M_PI * image_Ks[launch_index] *indirect_prd.color* pow(nDr, image_phong_exp[launch_index])/nDl;
             }
           }
 
