@@ -1,0 +1,3 @@
+[submodule "arealight_research"]
+	path = arealight_research
+	url = git@github.com:bmwang/arealight_research.git
