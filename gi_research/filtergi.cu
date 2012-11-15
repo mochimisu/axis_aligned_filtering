@@ -528,11 +528,11 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
           float nDr = max(dot(normalize(eye-ray_origin), R), 0.f);
 
           float3 H = normalize(sampleDir + (eye-ray_origin));
-          float nDh = max(dot( cur_n, H ),0.0f);          float nDl = max(dot( cur_n, sampleDir),0.f);
+          float nDh = max(dot( cur_n, H ),0.0f);          float nDl = max(dot( cur_n, sampleDir),0.f);
           float3 cur_ind = make_float3(0);
           if (nDl > 0.01)
           {
-            cur_ind = image_Kd[launch_index] * indirect_prd.color; 
+            cur_ind = image_Kd[launch_index] * indirect_prd.color; 
             if (nDr > 0.01)
             {
               cur_ind += M_PI * image_Ks[launch_index] *indirect_prd.color* pow(nDr, image_phong_exp[launch_index])/nDl;
