@@ -63,6 +63,26 @@ __device__ __inline__ void createONB( const optix::float3& n,
   V = cross( n, U );
 }
 
+
+// sample hemisphere with cosine^n density
+__device__ __inline__ void sampleUnitHemispherePower( const optix::float2& sample,
+  const optix::float3& U,
+  const optix::float3& V,
+  const optix::float3& W,
+  const float power,
+  optix::float3& point)
+{
+  using namespace optix;
+
+  float phi = 2.f * M_PIf*sample.x;
+  float r = sqrt(1 - pow(sample.y, 2.f/(power+1)));
+  float x = r * cos(phi);
+  float y = r * sin(phi);
+  float z = pow(sample.y, 1.f/(power+1));
+
+  point = x*U + y*V + z*W;
+}
+
 // sample hemisphere with cosine density
 __device__ __inline__ void sampleUnitHemisphere( const optix::float2& sample,
   const optix::float3& U,
@@ -70,6 +90,8 @@ __device__ __inline__ void sampleUnitHemisphere( const optix::float2& sample,
   const optix::float3& W,
   optix::float3& point )
 {
+sampleUnitHemispherePower(sample,U,V,W,1,point);
+/*
   using namespace optix;
 
   float phi = 2.0f * M_PIf*sample.x;
@@ -80,6 +102,7 @@ __device__ __inline__ void sampleUnitHemisphere( const optix::float2& sample,
   z = z > 0.0f ? sqrt(z) : 0.0f;
 
   point = x*U + y*V + z*W;
+  */
 }
 
 // HeatMap visualization
@@ -452,8 +475,12 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
   
   uint2 seed = indirect_rng_seeds[launch_index];
   float3 u,v,w;
+  float3 u2,v2,w2;
   float3 sampleDir;
   createONB(cur_n, u,v,w);
+  float3 eye_to_loc = normalize(ray_origin-eye);
+  float3 perf_refl_r = normalize(2*cur_n*dot(cur_n, eye_to_loc) - eye_to_loc);
+  createONB(perf_refl_r, u2,v2,w2);
   float2 sample = make_float2(0);
   
   int xbucket = 0;
@@ -470,6 +497,13 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
     make_float4(0) 
   };
   uint2 bucket_index = make_uint2(launch_index.x, launch_index.y*4);
+
+  int sample_type = 0; // quick addition: 0 = nDl, 1 = nDr (weighted w/ power)
+  float3 cur_Ks = image_Ks[launch_index];
+  if (cur_Ks.x + cur_Ks.y + cur_Ks.z > 0.01)
+  {
+    sample_type = 1;
+  }
 
   for(int i=0; i<2; ++i) {
     seed.x = rot_seed(seed.x, i);
@@ -498,7 +532,10 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
           //sample.x = (rnd(seed.x)+((float)k))/spp_hemi;
           //sample.y = (rnd(seed.y)+((float)k))/spp_hemi;
           //float2 sample = make_float2( rnd(seed.x), rnd(seed.y) );
-          sampleUnitHemisphere( sample, u,v,w, sampleDir);
+          if (sample_type == 1)
+            sampleUnitHemispherePower( sample, u2,v2,w2, image_phong_exp[launch_index], sampleDir);
+          else
+            sampleUnitHemisphere( sample, u,v,w, sampleDir);
 
           //construct indirect sample
           PerRayData_indirect indirect_prd;
@@ -528,14 +565,23 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
           float nDr = max(dot(normalize(eye-ray_origin), R), 0.f);
 
           float3 H = normalize(sampleDir + (eye-ray_origin));
-          float nDh = max(dot( cur_n, H ),0.0f);          float nDl = max(dot( cur_n, sampleDir),0.f);
+          float nDh = max(dot( cur_n, H ),0.0f);
+          float nDl = max(dot( cur_n, sampleDir),0.f);
           float3 cur_ind = make_float3(0);
           if (nDl > 0.01)
           {
-            cur_ind = image_Kd[launch_index] * indirect_prd.color; 
+            float3 diff_term = image_Kd[launch_index] * indirect_prd.color;
+            if (sample_type == 1)
+              diff_term *= nDl/pow(nDr, image_phong_exp[launch_index]);
+            cur_ind = diff_term; 
             if (nDr > 0.01)
             {
-              cur_ind += M_PI * image_Ks[launch_index] *indirect_prd.color* pow(nDr, image_phong_exp[launch_index])/nDl;
+              float3 spec_term = image_Ks[launch_index] *indirect_prd.color;
+              if (sample_type == 0)
+                spec_term *= pow(nDr, image_phong_exp[launch_index]);
+              else
+                spec_term *= nDl;
+              cur_ind += spec_term;
             }
           }
 
