@@ -258,10 +258,8 @@ void FilterGI::initScene( InitialCameraData& camera_data )
 
   for(int i=0; i<65; i++) {
     lookups[i] = gaussian_lookup[i];
-  }/*
-   for(int i=0; i<60; i++) {
-   lookups[i] = exp_lookup[i];
-   }*/
+  }
+   
   gauss_lookup->unmap();
 
   // world space buffer
@@ -283,7 +281,7 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   _filter_indirect = 1;
   m_context["filter_indirect"]->setUint(_filter_indirect);
 
-  _view_mode = 2;
+  _view_mode = 0;
   m_context["view_mode"]->setUint(_view_mode);
 
 
@@ -336,32 +334,16 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   m_context->setExceptionProgram( 0, exception_program );
   m_context["bad_color"]->setFloat( 0.0f, 1.0f, 0.0f );
 
-  //Blur program (i hope)
-  //Program blur_program = m_context->createProgramFromPTXFile( _ptx_path, "gaussianBlur" );
-
-
   std::string miss_name;
   miss_name = "miss";
   m_context->setMissProgram( 0, m_context->createProgramFromPTXFile( _ptx_path, miss_name ) );
   const float3 default_color = make_float3(1.0f, 1.0f, 1.0f);
   m_context["bg_color"]->setFloat( make_float3( 0.34f, 0.55f, 0.85f ) );
 
-//#if SCENE==1
-  // grids2
 
-  //float3 pos = make_float3(-4.5, 16, 8);
   float3 pos1 = make_float3(1.5, 16, 8);
   float3 pos2 = make_float3(-4.5, 21.8284, 3.8284);
-  /*
-  float3 pos = make_float3(-4.5, 16, 8);
-  float3 pos1 = make_float3(3.5, 16, 8);
-  float3 pos2 = make_float3(-4.5, 17, 7);
-  */
-  //float3 axis1 = pos1-pos;
-  //float3 axis2 = pos2-pos;
 
-  //float3 norm = cross(axis1,axis2);
-  //float3 pos = make_float3(0, 1, -1);
   float3 pos   = make_float3( 343.0f, 548.6f, 227.0f);
 
   BasicLight lights[] = {
@@ -371,18 +353,6 @@ void FilterGI::initScene( InitialCameraData& camera_data )
     }
   };
 
-  /*
-  AreaLight lights[] = {
-    { pos,
-    pos1,
-    pos2,
-    make_float3(1.0f, 1.0f, 1.0f)
-    }
-  };
-  */
-
-  //float3 normed_norm = normalize(norm);
-  //m_context["lightnorm"]->setFloat(normed_norm);
 
   _env_lights = lights;
   light_buffer = m_context->createBuffer(RT_BUFFER_INPUT);
@@ -396,23 +366,24 @@ void FilterGI::initScene( InitialCameraData& camera_data )
 
 
   // Set up camera
-  /*
-  camera_data = InitialCameraData( make_float3( -4.5f, 2.5f, 5.5f ), // eye
-    //camera_data = InitialCameraData( make_float3( -5.1f, 2.1f, -3.1f ), // eye
-    make_float3( 0.0f, 0.5f,  0.0f ), // lookat
-    //make_float3( -4.0f, 0.0f,  -2.0f ), // looka
-    make_float3( 0.0f, 1.0f,  0.0f ), // up
-    60 );                             // vfov
-*/
+
+    //sponza
+  camera_data = InitialCameraData( make_float3( 652.5f, 693.5f, 0.f ), // eye
+      make_float3( 614.0f, 654.0f, 0.0f ),    // lookat
+      make_float3( 0.0f, 1.0f,  0.0f ),       // up
+      35.0f );                                // vfov
+  /* cornell box
     camera_data = InitialCameraData( make_float3( 278.0f, 273.0f, -800.0f ), // eye
                                      make_float3( 278.0f, 273.0f, 0.0f ),    // lookat
                                      make_float3( 0.0f, 1.0f,  0.0f ),       // up
                                      35.0f );                                // vfov
+                                     */
 
   m_context["eye"]->setFloat( make_float3( 0.0f, 0.0f, 0.0f ) );
   m_context["U"]->setFloat( make_float3( 0.0f, 0.0f, 0.0f ) );
   m_context["V"]->setFloat( make_float3( 0.0f, 0.0f, 0.0f ) );
   m_context["W"]->setFloat( make_float3( 0.0f, 0.0f, 0.0f ) );
+
 
 //#endif
 
@@ -443,20 +414,6 @@ void FilterGI::trace( const RayGenCameraData& camera_data )
 {
   _frame_number ++;
 
-  /*
-  if (_frame_number == 3) {
-  std::cout << "Matrix of spp" << std:: endl;
-  Buffer spp = m_context["spp"]->getBuffer();
-  float* spp_arr = reinterpret_cast<float*>( spp->map() );
-  for(unsigned int j = 0; j < _height; ++j ) {
-  for(unsigned int i = 0; i < _width; ++i ) {
-  std::cout << spp_arr[i+j*_width] <<", ";
-  }
-  std::cout << std::endl;
-  }
-  spp->unmap();
-  }
-  */
 
   if(m_camera_changed) {
     m_context["numAvg"]->setUint(1);
@@ -478,42 +435,13 @@ void FilterGI::trace( const RayGenCameraData& camera_data )
   _previous_frame_time = t;
 
   if (_is_anim)
-    //_anim_t += 0.03; //0.7 * time_elapsed; //0.6 * time_elapsed;
     _anim_t += 0.7 * time_elapsed; //0.6 * time_elapsed;
   float3 eye, u, v, w;
   eye.x = (float) (camera_data.eye.x * sin(_anim_t));
   eye.y = (float)( 0.2 + camera_data.eye.y + cos( _anim_t*1.5 ) );
   eye.z = (float)( 0.5+camera_data.eye.z*cos( _anim_t ) );
-  //eye = camera_data.eye;
   float3 lookat = make_float3(0);
 
-//#define MOVE_LIGHT
-#ifdef MOVE_LIGHT
-float3 d = make_float3(0.15*sin(_anim_t/1.0),0.2*cos(_anim_t/1.0),0.1*sin(_anim_t/1.2));
-BasicLight* lights = reinterpret_cast<BasicLight*>(light_buffer->map());
-lights[0].v1 -= d;
-lights[0].v2 -= d;
-lights[0].v3 -= d;
-
-light_buffer->unmap();
-
-//m_camera_changed = true;
-#endif
-
-  
-//#if SCENE==1
-  optix::Matrix4x4 tr = optix::Matrix4x4::rotate(sin(_anim_t/6.0)*M_PI,make_float3(0,1,0))
-    *optix::Matrix4x4::translate(make_float3(0,0.2+0.3*sin(_anim_t),0));
-
-  optix::Matrix4x4 tr2 = optix::Matrix4x4::rotate(-M_PI/6+cos(_anim_t*2)/2, make_float3(1,0,0));
-//#define MOVE_GEOM
-#ifdef MOVE_GEOM
-  _trans->setMatrix( false, tr.getData(), 0);
-  _trans2->setMatrix( false, tr2.getData(), 0);
-  _top_grp->getAcceleration()->markDirty();
-#endif
-  
-//#endif
 
   PinholeCamera pc( eye, lookat, make_float3(0,1,0), fov, fov/(width/height) );
   pc.getEyeUVW( eye, u, v, w );
@@ -545,7 +473,6 @@ light_buffer->unmap();
   m_context["frame"]->setUint( _frame_number );
 
   int num_resample = ceil((float)_brute_rpp * _brute_rpp / (_max_rpp_pass * _max_rpp_pass));
-  //std::cout << "Number of passes to resample: " << num_resample << std::endl;
 
   //Initial 16 Samples
   if (_frame_number == 0)
@@ -563,74 +490,6 @@ light_buffer->unmap();
   m_context->launch( 1, static_cast<unsigned int>(buffer_width),
     static_cast<unsigned int>(buffer_height) );
 
-#define NUM_FRAMES 500
-//#define SPP_AVG
-#ifdef SPP_AVG
-  //spp = m_context["spp"]->getBuffer();
-  Buffer cur_spp = m_context["spp_cur"]->getBuffer();
-  Buffer brdf = m_context["brdf"]->getBuffer();
-  float min_cur_spp = 10000000.0;
-  float max_cur_spp = 0.0;
-  float avg_cur_spp = 0.0;
-  float3* brdf_arr = reinterpret_cast<float3*>( brdf->map() );
-  uint2 err_loc;
-  uint2 err_first_loc;
-  bool first_loc_set = false;
-  int num_cur_avg = 0;
-  int num_cur_low = 0;
-  float* cur_spp_arr = reinterpret_cast<float*>( cur_spp->map() );
-  for(unsigned int j = 0; j < _height; ++j ) {
-    for(unsigned int i = 0; i < _width; ++i ) {
-      float cur_brdf_x = brdf_arr[i+j*_width].x;
-      if (cur_brdf_x > -1) {
-        //std::cout << spp_arr[i+j*_width] <<", ";
-        float cur_spp_val = cur_spp_arr[i+j*_width];
-        if (cur_spp_val > -0.001) {
-          min_cur_spp = min(min_cur_spp,cur_spp_val);
-          max_cur_spp = max(max_cur_spp,cur_spp_val);
-          avg_cur_spp += cur_spp_val;
-          num_cur_avg++;
-          if (cur_spp_val < 10)
-            num_cur_low++;
-        }
-      }
-    }
-    //std::cout << std::endl;
-  }
-  cur_spp->unmap();
-  brdf->unmap();
-  avg_cur_spp /= num_cur_avg;
-  _total_avg_cur_spp += avg_cur_spp;
-  //std::cout << "Average SPP this frame: " << avg_cur_spp << std::endl;
-
-  if (_frame_number > NUM_FRAMES) {
-    std::cout << "SPP Average: " << (_total_avg_cur_spp/NUM_FRAMES) << std::endl;
-  }
-#endif
-//#define CAPTURE_FRAMES
-#ifdef CAPTURE_FRAMES
-  std::stringstream fname;
-  fname << "output_";
-  fname << std::setw(7) << std::setfill('0') << output_num;
-  fname << ".ppm";
-  Buffer output_buf = _scene->getOutputBuffer();
-  output_num++;
-
-  sutilDisplayFilePPM(fname.str().c_str(), output_buf->get());
-
-  if (output_num%(NUM_FRAMES/10) == 0)
-    std::cout << ((float)(output_num)/NUM_FRAMES)*100.0 << "%" << std::endl;  if (output_num > NUM_FRAMES) {
-    exit(0);
-  }
-
-
-  if (_frame_number > NUM_FRAMES) {
-    //QueryPerformanceCounter(&ended_render);
-    //double timing = (double(ended_render.QuadPart - _started_render.QuadPart)/_perf_freq/1000.0);
-    //std::cout << "Finished rendering at " << (NUM_FRAMES/timing) << " fps (average)" << std::endl;
-    exit(0);
-  }
-#endif
 }
 
 
@@ -656,10 +515,7 @@ void FilterGI::resetAccumulation()
   _frame_number = 0;
   m_context["frame"]->setUint( _frame_number );
   _converged = false;
-  //_started_render = timeGetTime();
-  //QueryPerformanceCounter(&_started_render);
 
-  //_perf_freq = double(freq.QuadPart)/1000.0;
 }
 
 
@@ -996,10 +852,6 @@ bool FilterGI::keyPressed(unsigned char key, int x, int y) {
 
     return true;
 
-    /*m_context["eye"]->setFloat( camera_data.eye );
-    m_context["U"]->setFloat( camera_data.U );
-    m_context["V"]->setFloat( camera_data.V );
-    m_context["W"]->setFloat( camera_data.W ); */
   case 'R':
   case 'r':
     sutilCurrentTime(&_previous_frame_time);
@@ -1085,8 +937,6 @@ void FilterGI::setMaterial( GeometryInstance& gi,
   gi[color_name]->setFloat(color);
 }
 
-//#if SCENE==1
-//grids2
 void FilterGI::createGeometry()
 {
   //Intersection programs
@@ -1097,376 +947,41 @@ void FilterGI::createGeometry()
   Program diffuse_ch = closest_hit;
   Program diffuse_ah = any_hit;
 
-  // Light buffer
+  //sponza
   BasicLight light;
-  light.pos   = make_float3( 343.0f, 548.6f, 227.0f);
-  //light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
-  //light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
-  //light.normal   = normalize( cross(light.v1, light.v2) );
-  //light.emission = make_float3( 15.0f, 15.0f, 5.0f );
-
-  Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
+  light.pos = make_float3( 580.f, 680.f, 0.f);
+    Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
   light_buffer->setFormat( RT_FORMAT_USER );
   light_buffer->setElementSize( sizeof( BasicLight ) );
   light_buffer->setSize( 1u );
   memcpy( light_buffer->map(), &light, sizeof( light ) );
   light_buffer->unmap();
   m_context["lights"]->setBuffer( light_buffer );
-  // Set up material
-  Material diffuse = m_context->createMaterial();
-  //Program diffuse_ch = m_context->createProgramFromPTXFile( ptxpath( "path_tracer", "path_tracer.cu" ), "diffuse" );
-  //Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "path_tracer", "path_tracer.cu" ), "shadow" );
-  diffuse->setClosestHitProgram( 0, diffuse_ch );
-  diffuse->setClosestHitProgram( 1, diffuse_ah );
-  diffuse->setAnyHitProgram( 2, shadow_hit );
-  diffuse["Ks"]->setFloat( 0.0f, 0.0f, 0.0f );
-  diffuse["phong_exp"]->setFloat( 1.0f );
 
-  Material specular = m_context->createMaterial();
-  specular->setClosestHitProgram( 0, closest_hit );
-  specular->setClosestHitProgram( 1, any_hit );
-  specular->setAnyHitProgram( 2, shadow_hit );
-  specular["Kd"]->setFloat(0.4f, 0.4f, 0.4f);
-  specular["Ks"]->setFloat(1.f, 1.f, 1.f);
-  specular["Kd"]->setFloat(0.f, 0.f, 0.f);
-  //specular["Ks"]->setFloat( 0.0f, 0.0f, 0.0f );
-  specular["phong_exp"]->setFloat( 10.f );
-  
-
-  //Material diffuse_light = m_context->createMaterial();
-  //Program diffuse_em = m_context->createProgramFromPTXFile( ptxpath( "path_tracer", "path_tracer.cu" ), "diffuseEmitter" );
-  //diffuse_light->setClosestHitProgram( 0, diffuse_em );
-
-  // Set up parallelogram programs
-  std::string ptx_path = ptxpath( "filtergi", "parallelogram.cu" );
-  m_pgram_bounding_box = m_context->createProgramFromPTXFile( ptx_path, "bounds" );
-  m_pgram_intersection = m_context->createProgramFromPTXFile( ptx_path, "intersect" );
-
-  // create geometry instances
-  std::vector<GeometryInstance> gis;
-
-  const float3 white = make_float3( 0.8f, 0.8f, 0.8f );
-  const float3 halfwhite = make_float3( 0.4f, 0.4f, 0.4f );
-  const float3 black = make_float3( 0.f, 0.f, 0.f );
-  const float3 green = make_float3( 0.05f, 0.8f, 0.05f );
-  const float3 red   = make_float3( 0.8f, 0.05f, 0.05f );
-  const float3 light_em = make_float3( 15.0f, 15.0f, 5.0f );
-
-  // Floor
-  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
-                                      make_float3( 0.0f, 0.0f, 559.2f ),
-                                      make_float3( 556.0f, 0.0f, 0.0f ) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
-
-  // Ceiling
-  gis.push_back( createParallelogram( make_float3( 0.0f, 548.8f, 0.0f ),
-                                      make_float3( 556.0f, 0.0f, 0.0f ),
-                                      make_float3( 0.0f, 0.0f, 559.2f ) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
-
-  // Back wall
-  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 559.2f),
-                                      make_float3( 0.0f, 548.8f, 0.0f),
-                                      make_float3( 556.0f, 0.0f, 0.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
-
-  // Right wall
-  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
-                                      make_float3( 0.0f, 548.8f, 0.0f ),
-                                      make_float3( 0.0f, 0.0f, 559.2f ) ) );
-  setMaterial(gis.back(), diffuse, "Kd", green);
-
-  // Left wall
-  gis.push_back( createParallelogram( make_float3( 556.0f, 0.0f, 0.0f ),
-                                      make_float3( 0.0f, 0.0f, 559.2f ),
-                                      make_float3( 0.0f, 548.8f, 0.0f ) ) );
-  setMaterial(gis.back(), diffuse, "Kd", red);
-
-  /*
-  // Short block
-  gis.push_back( createParallelogram( make_float3( 130.0f, 165.0f, 65.0f),
-                                      make_float3( -48.0f, 0.0f, 160.0f),
-                                      make_float3( 160.0f, 0.0f, 49.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
-  gis.push_back( createParallelogram( make_float3( 290.0f, 0.0f, 114.0f),
-                                      make_float3( 0.0f, 165.0f, 0.0f),
-                                      make_float3( -50.0f, 0.0f, 158.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
-  gis.push_back( createParallelogram( make_float3( 130.0f, 0.0f, 65.0f),
-                                      make_float3( 0.0f, 165.0f, 0.0f),
-                                      make_float3( 160.0f, 0.0f, 49.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
-  gis.push_back( createParallelogram( make_float3( 82.0f, 0.0f, 225.0f),
-                                      make_float3( 0.0f, 165.0f, 0.0f),
-                                      make_float3( 48.0f, 0.0f, -160.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
-  gis.push_back( createParallelogram( make_float3( 240.0f, 0.0f, 272.0f),
-                                      make_float3( 0.0f, 165.0f, 0.0f),
-                                      make_float3( -158.0f, 0.0f, -47.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
-
-  // Tall block
-  gis.push_back( createParallelogram( make_float3( 423.0f, 330.0f, 247.0f),
-                                      make_float3( -158.0f, 0.0f, 49.0f),
-                                      make_float3( 49.0f, 0.0f, 159.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", black);
-  setMaterial(gis.back(), diffuse, "Ks", halfwhite);
-  gis.push_back( createParallelogram( make_float3( 423.0f, 0.0f, 247.0f),
-                                      make_float3( 0.0f, 330.0f, 0.0f),
-                                      make_float3( 49.0f, 0.0f, 159.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", black);
-  setMaterial(gis.back(), diffuse, "Ks", halfwhite);
-  gis.push_back( createParallelogram( make_float3( 472.0f, 0.0f, 406.0f),
-                                      make_float3( 0.0f, 330.0f, 0.0f),
-                                      make_float3( -158.0f, 0.0f, 50.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", black);
-  setMaterial(gis.back(), diffuse, "Ks", halfwhite);
-  gis.push_back( createParallelogram( make_float3( 314.0f, 0.0f, 456.0f),
-                                      make_float3( 0.0f, 330.0f, 0.0f),
-                                      make_float3( -49.0f, 0.0f, -160.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", black);
-  setMaterial(gis.back(), diffuse, "Ks", halfwhite);
-  gis.push_back( createParallelogram( make_float3( 265.0f, 0.0f, 296.0f),
-                                      make_float3( 0.0f, 330.0f, 0.0f),
-                                      make_float3( 158.0f, 0.0f, -49.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", black);
-  setMaterial(gis.back(), diffuse, "Ks", halfwhite);
-
-  */
-
-  // Create shadow group (no light)
-  /*
-  GeometryGroup shadow_group = m_context->createGeometryGroup(gis.begin(), gis.end());
-  shadow_group->setAcceleration( m_context->createAcceleration("Bvh","Bvh") );
-  m_context["top_shadower"]->set( shadow_group );
-  */
-
-  // Light
-  //gis.push_back( createParallelogram( make_float3( 343.0f, 548.6f, 227.0f),
-  //                                    make_float3( -130.0f, 0.0f, 0.0f),
-  //                                    make_float3( 0.0f, 0.0f, 105.0f) ) );
-  //setMaterial(gis.back(), diffuse_light, "emission_color", light_em);
-
-  // Create geometry group
-  GeometryGroup geometry_group = m_context->createGeometryGroup(gis.begin(), gis.end());
-
-  Matrix4x4 dragon_xform = Matrix4x4::translate(make_float3(250,200,300)) 
-    * Matrix4x4::scale(make_float3(30,30,30));
-  Matrix4x4 elepham_xform = Matrix4x4::translate(make_float3(250,200,300)) 
-    * Matrix4x4::rotate(M_PI/2.,make_float3(0,-1,0))
-    * Matrix4x4::scale(make_float3(0.3,0.3,0.3));
-  ObjLoader * dragon_loader = new ObjLoader( texpath("dragon.obj").c_str(), m_context, geometry_group, specular );
-  dragon_loader->load(dragon_xform);
-  //ObjLoader * dragon_loader = new ObjLoader( texpath("elepham.obj").c_str(), m_context, geometry_group, specular );
-  //dragon_loader->load(elepham_xform);
-  geometry_group->setAcceleration( m_context->createAcceleration("Bvh","Bvh") );
-  m_context["top_object"]->set( geometry_group );
-  m_context["top_shadower"]->set( geometry_group );
-
-
-
-  /*
-  //Make some temp geomgroups
   _top_grp = m_context->createGroup();
-  GeometryGroup floor_geom_group = m_context->createGeometryGroup();
-  GeometryGroup grid1_geom_group = m_context->createGeometryGroup();
-  GeometryGroup grid3_geom_group = m_context->createGeometryGroup();
-  GeometryGroup grid2_geom_group = m_context->createGeometryGroup();
+  GeometryGroup sponza_geom_group = m_context->createGeometryGroup();
 
-  //Set some materials
   Material floor_mat = m_context->createMaterial();
   floor_mat->setClosestHitProgram(0, closest_hit);
-  floor_mat->setAnyHitProgram(1, any_hit);
-  floor_mat["Ka"]->setFloat( 0.0f, 0.0f, 0.0f );
+  floor_mat->setClosestHitProgram(1, any_hit);
   floor_mat["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
-  floor_mat["Ks"]->setFloat( 0.0f, 0.0f, 0.0f );
-  floor_mat["phong_exp"]->setFloat( 100.0f );
-  floor_mat["reflectivity"]->setFloat( 0.0f, 0.0f, 0.0f );
-  floor_mat["reflectivity_n"]->setFloat( 0.0f, 0.0f, 0.0f );
   floor_mat["obj_id"]->setInt(10);
 
-  Material grid1_mat = m_context->createMaterial();
-  grid1_mat->setClosestHitProgram(0, closest_hit);
-  grid1_mat->setAnyHitProgram(1, any_hit);
-  grid1_mat["Ka"]->setFloat( 0.0f, 0.0f, 0.0f );
-  grid1_mat["Kd"]->setFloat( 0.72f, 0.100741f, 0.09848f );
-  grid1_mat["Ks"]->setFloat( 0.0f, 0.0f, 0.0f );
-  grid1_mat["phong_exp"]->setFloat( 100.0f );
-  grid1_mat["reflectivity"]->setFloat( 0.0f, 0.0f, 0.0f );
-  grid1_mat["reflectivity_n"]->setFloat( 0.0f, 0.0f, 0.0f );
-  grid1_mat["obj_id"]->setInt(11);
-
-  Material grid2_mat = m_context->createMaterial();
-  grid2_mat->setClosestHitProgram(0, closest_hit);
-  grid2_mat->setAnyHitProgram(1, any_hit);
-  grid2_mat["Ka"]->setFloat( 0.0f, 0.0f, 0.0f );
-  grid2_mat["Kd"]->setFloat( 0.0885402f, 0.77f, 0.08316f );
-  grid2_mat["Ks"]->setFloat( 0.0f, 0.0f, 0.0f );
-  grid2_mat["phong_exp"]->setFloat( 100.0f );
-  grid2_mat["reflectivity"]->setFloat( 0.0f, 0.0f, 0.0f );
-  grid2_mat["reflectivity_n"]->setFloat( 0.0f, 0.0f, 0.0f );
-  grid2_mat["obj_id"]->setInt(12);
-
-  Material grid3_mat = m_context->createMaterial();
-  grid3_mat->setClosestHitProgram(0, closest_hit);
-  grid3_mat->setAnyHitProgram(1, any_hit);
-  grid3_mat["Ka"]->setFloat( 0.0f, 0.0f, 0.0f );
-  grid3_mat["Kd"]->setFloat( 0.123915f, 0.192999f, 0.751f );
-  grid3_mat["Ks"]->setFloat( 0.0f, 0.0f, 0.0f );
-  grid3_mat["phong_exp"]->setFloat( 100.0f );
-  grid3_mat["reflectivity"]->setFloat( 0.0f, 0.0f, 0.0f );
-  grid3_mat["reflectivity_n"]->setFloat( 0.0f, 0.0f, 0.0f );
-  grid3_mat["obj_id"]->setInt(13);
-
-  //Transformations
-  Matrix4x4 floor_xform = Matrix4x4::identity();
-  float *floor_xform_m = floor_xform.getData();
-  floor_xform_m[0] = 4.0;
-  floor_xform_m[10] = 4.0;
-  floor_xform_m[12] = 0.0778942;
-  floor_xform_m[14] = 0.17478;
-
-  Matrix4x4 grid1_xform = Matrix4x4::identity();
-  float *grid1_xform_m = grid1_xform.getData();
-  grid1_xform_m[0] = 0.75840;
-  grid1_xform_m[1] = 0.6232783;
-  grid1_xform_m[2] = -0.156223;
-  grid1_xform_m[3] = 0.0;
-  grid1_xform_m[4] = -0.465828;
-  grid1_xform_m[5] = 0.693876;
-  grid1_xform_m[6] = 0.549127;
-  grid1_xform_m[7] = 0.0;
-  grid1_xform_m[8] = 0.455878;
-  grid1_xform_m[9] = -0.343688;
-  grid1_xform_m[10] = 0.821008;
-  grid1_xform_m[11] = 0.0;
-  grid1_xform_m[12] = 2.18526;
-  grid1_xform_m[13] = 1.0795;
-  grid1_xform_m[14] = 1.23179;
-  grid1_xform_m[15] = 1.0;
-
-  Matrix4x4 grid2_xform = Matrix4x4::identity();
-  float *grid2_xform_m = grid2_xform.getData();
-  grid2_xform_m[0] = 0.893628;
-  grid2_xform_m[1] = 0.203204;
-  grid2_xform_m[2] = -0.40017;
-  grid2_xform_m[3] = 0.0;
-  grid2_xform_m[4] = 0.105897;
-  grid2_xform_m[5] = 0.770988;
-  grid2_xform_m[6] = 0.627984;
-  grid2_xform_m[7] = 0.0;
-  grid2_xform_m[8] = 0.436135;
-  grid2_xform_m[9] = -0.603561;
-  grid2_xform_m[10] = 0.667458;
-  grid2_xform_m[11] = 0.0;
-  grid2_xform_m[12] = 0.142805;
-  grid2_xform_m[13] = 1.0837;
-  grid2_xform_m[14] = 0.288514;
-  grid2_xform_m[15] = 1.0;
+  //ObjLoader * floor_loader = new ObjLoader( texpath("dabrovic-sponza/sponza.obj").c_str(), m_context, sponza_geom_group, floor_mat );
+  ObjLoader * floor_loader = new ObjLoader( texpath("crytek_sponza/sponza.obj").c_str(), m_context, sponza_geom_group, floor_mat, true );
+  floor_loader->load();
+  floor_loader->load();
 
 
-
-  Matrix4x4 grid3_xform = Matrix4x4::identity();
-  float *grid3_xform_m = grid3_xform.getData();
-  grid3_xform_m[0] = 0.109836;
-  grid3_xform_m[1] = 0.392525;
-  grid3_xform_m[2] = -0.913159;
-  grid3_xform_m[3] = 0.0;
-  grid3_xform_m[4] = 0.652392;
-  grid3_xform_m[5] = 0.664651;
-  grid3_xform_m[6] = 0.364174;
-  grid3_xform_m[7] = 0.0;
-  grid3_xform_m[8] = 0.74988;
-  grid3_xform_m[9] = -0.635738;
-  grid3_xform_m[10] = -0.183078;
-  grid3_xform_m[11] = 0.0;
-  grid3_xform_m[12] = -2.96444;
-  grid3_xform_m[13] = 1.86879;
-  grid3_xform_m[14] = 1.00696;
-  grid3_xform_m[15] = 1.0;
-
-  floor_xform = floor_xform.transpose();
-  grid1_xform = grid1_xform.transpose();
-  grid2_xform = grid2_xform.transpose();
-  grid3_xform = grid3_xform.transpose();
-
-  //Load the OBJ's
-  ObjLoader * floor_loader = new ObjLoader( texpath("grids2/floor.obj").c_str(), m_context, floor_geom_group, floor_mat );
-  floor_loader->load(floor_xform);
-  ObjLoader * grid1_loader = new ObjLoader( texpath("grids2/grid1.obj").c_str(), m_context, grid1_geom_group, grid1_mat );
-  grid1_loader->load(grid1_xform);
-  ObjLoader * grid3_loader = new ObjLoader( texpath("grids2/grid3.obj").c_str(), m_context, grid3_geom_group, grid3_mat );
-  grid3_loader->load(grid3_xform);
-  ObjLoader * grid2_loader = new ObjLoader( texpath("grids2/grid2.obj").c_str(), m_context, grid2_geom_group, grid2_mat );
-  grid2_loader->load(grid2_xform);
-
-
-
-  //Make one big geom group
-  GeometryGroup geom_group = m_context->createGeometryGroup();
-
-  geom_group->setChildCount(0);
-  //geom_group->setChild( 0, floor_geom_group->getChild(0) );
-  //geom_group->setChild( 1, grid1_geom_group->getChild(0) );
-  //geom_group->setChild( 2, grid2_geom_group->getChild(0) );
-  //geom_group->setChild( 3, grid2_geom_group->getChild(0) );
-  //geom_group->setChild( 3, grid3_geom_group->getChild(0) );
-
-  //appendGeomGroup(geom_group, floor_geom_group);
-
-  _trans = m_context->createTransform();
-  _trans2 = m_context->createTransform();
-
-  grid2_geom_group->getAcceleration()->setProperty("refit", "1");
-  grid3_geom_group->getAcceleration()->setProperty("refit", "1");
-
-  _anim_geom = grid2_geom_group->getChild(0)->getGeometry();
-  _anim_geom_group = grid2_geom_group;
-  
-
-  optix::Matrix4x4 test = optix::Matrix4x4::translate(make_float3(0,0,0));
-  _trans->setMatrix( false, test.getData(), 0);
-  _trans->setChild( grid2_geom_group );
-
-  _trans2->setMatrix( false, test.getData(), 0);
-  _trans2->setChild( grid3_geom_group );
-
-  //grid2_geom_group->getAcceleration()->markDirty();
-
-  std::cout << "asdf" << std::endl;
-  std::cout << geom_group->getChildCount() << std::endl;
-  appendGeomGroup(geom_group, floor_geom_group);
-  appendGeomGroup(geom_group, grid1_geom_group);
-  //appendGeomGroup(geom_group, grid2_geom_group);
-  //appendGeomGroup(geom_group, grid3_geom_group);
-  //geom_group->setChild(ct, global);
-  //geom_group->setAcceleration( m_context->createAcceleration("Sbvh", "Bvh") );
-  geom_group->setAcceleration( m_context->createAcceleration("Bvh", "Bvh") );
-  //geom_group->setAcceleration( m_context->createAcceleration("TriangleKdTree", "KdTree") );
-  //Acceleration accl = floor_geom_group->getAcceleration();
-  //std::cout << accl->getBuilder() << std::endl;
-  //geom_group->setAcceleration( grid3_geom_group->getAcceleration() );
-
-  //int ct = geom_group->getChildCount();
-  //geom_group->setChildCount(ct+1);
-  //geom_group->setChild(ct, _trans.get() );
-
-  _top_grp->setChildCount(3);
-  _top_grp->setChild(0, geom_group);
-  _top_grp->setChild(1, _trans);
-  _top_grp->setChild(2, _trans2);
+  _top_grp->setChildCount(1);
+  _top_grp->setChild(0, sponza_geom_group);
 
   _top_grp->setAcceleration(m_context->createAcceleration("Bvh", "Bvh") );
   _top_grp->getAcceleration()->setProperty("refit", "1");
 
-  //Set the geom group
+  
   m_context["top_object"]->set( _top_grp );
   m_context["top_shadower"]->set( _top_grp );
-
-  */
-
-  //m_context["top_object"]->set( grid2_geom_group );
-  //m_context["top_shadower"]->set( grid2_geom_group );
 }
 //#endif
 

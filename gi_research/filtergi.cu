@@ -17,6 +17,7 @@
 
 rtDeclareVariable(float3, geometric_normal, attribute geometric_normal, );
 rtDeclareVariable(float3, shading_normal,   attribute shading_normal, );
+rtDeclareVariable(float3, texcoord, attribute texcoord, ); 
 
 rtDeclareVariable(PerRayData_direct, prd_direct, rtPayload, );
 rtDeclareVariable(PerRayData_indirect,   prd_indirect,   rtPayload, );
@@ -221,6 +222,9 @@ rtBuffer<int, 2>                  indirect_spp;
 rtBuffer<int, 2>                  target_indirect_spp;
 
 rtBuffer<float3, 2>               image_Kd;
+
+rtTextureSampler<float4, 2>   diffuse_map;  
+
 rtBuffer<float3, 2>               image_Ks;
 rtBuffer<float, 2>               image_phong_exp;
 rtBuffer<float, 2>                omega_v_max;
@@ -832,7 +836,7 @@ RT_PROGRAM void miss()
 rtDeclareVariable(float3,   Ka, , );
 rtDeclareVariable(float3,   Ks, , );
 rtDeclareVariable(float,    phong_exp, , );
-rtDeclareVariable(float3,   Kd, , );
+//rtDeclareVariable(float3,   Kd, , );
 rtDeclareVariable(int,      obj_id, , );
 rtDeclareVariable(float3,   ambient_light_color, , );
 rtDeclareVariable(rtObject, top_shadower, , );
@@ -853,6 +857,9 @@ RT_PROGRAM void any_hit_shadow()
 //
 RT_PROGRAM void any_hit_indirect()
 {
+  float2 uv                     = make_float2(texcoord);
+  float3 Kd = make_float3(tex2D(diffuse_map, uv.x, uv.y));
+
   prd_indirect.color = make_float3(1);
   prd_indirect.hit = true;
 
@@ -896,6 +903,9 @@ RT_PROGRAM void any_hit_indirect()
 //Initial samples
 RT_PROGRAM void closest_hit_direct()
 {
+  float2 uv                     = make_float2(texcoord);
+
+  float3 Kd = make_float3(tex2D(diffuse_map, uv.x, uv.y));
   float3 world_geo_normal   = normalize( rtTransformNormal( RT_OBJECT_TO_WORLD, geometric_normal ) );
   float3 world_shade_normal = normalize( rtTransformNormal( RT_OBJECT_TO_WORLD, shading_normal ) );
   float3 ffnormal     = faceforward( world_shade_normal, -ray.direction, world_geo_normal );
@@ -1043,8 +1053,6 @@ RT_PROGRAM void closest_hit_radiance()
       //nDl term needed if sampling by cosine density?
       //float nDl = max(dot( ffnormal, normalize(sampleDir)), 0.f);
       float3 cur_ind = Kd * indirect_prd.color;
-
-      //indirectColor += Kd * indirect_prd.color;
 
 
       //TODO: optimize
