@@ -92,18 +92,6 @@ __device__ __inline__ void sampleUnitHemisphere( const optix::float2& sample,
   optix::float3& point )
 {
 sampleUnitHemispherePower(sample,U,V,W,1,point);
-/*
-  using namespace optix;
-
-  float phi = 2.0f * M_PIf*sample.x;
-  float r = sqrt( sample.y );
-  float x = r * cos(phi);
-  float y = r * sin(phi);
-  float z = 1.0f - x*x -y*y;
-  z = z > 0.0f ? sqrt(z) : 0.0f;
-
-  point = x*U + y*V + z*W;
-  */
 }
 
 // HeatMap visualization
@@ -141,19 +129,6 @@ __device__ __inline__ float gaussFilter(float distsq, float wxf)
   return exp(-sample);
 }
 
-
-//marsaglia polar method
-__device__ __inline__ float2 randomGauss(float center, float std_dev, float2 sample)
-{
-  float u,v,s;
-  u = sample.x * 2 - 1;
-  v = sample.y * 2 - 1;
-  s = u*u + v*v;
-  float2 result = make_float2(
-    center+std_dev*v*sqrt(-2.0*log(s)/s),
-    center+std_dev*u*sqrt(-2.0*log(s)/s));
-  return result;
-}
 
 //omega_v_max for phong brdf
 __device__ __inline__ float glossy_blim(float3& r, float3& c, float m){
@@ -368,10 +343,6 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
             float cur_zpmin = sqrt(dot(zvec,zvec) - dot(prd.n,zvec));
             zpmin[totbucket] = min(zpmin[totbucket], cur_zpmin);
             zpmax[totbucket] = max(zpmax[totbucket], cur_zpmin);
-            //z_perp[cur_bucket_index].x = min(z_perp[cur_bucket_index].x, cur_zpmin);
-            //z_perp[cur_bucket_index].y = max(z_perp[cur_bucket_index].y, cur_zpmin);
-            // TODO: find actual zpmax
-            //prd_direct.zpmax = max(prd_direct.zpmax, cur_zpmin);
           }
 
           //nDl term needed if sampling by cosine density?
@@ -393,7 +364,6 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
               }
           }
 
-          //indirectColor += Kd * indirect_prd.color;
 
 
           //TODO: optimize
@@ -431,18 +401,10 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
     //target_indirect_spp[cur_bucket_index] = 0;
     //indirect_spp[cur_bucket_index] = init_ind_spp_sqrt/2;
   }
-  //if (indirect_illum_num > 0.01)
-    //indirect_illum[launch_index] = indirect_illum_unavg/indirect_illum_num;
-    indirect_illum[launch_index] = indirect_illum_unavg/4;
+  indirect_illum[launch_index] = indirect_illum_unavg/4;
   indirect_rng_seeds[launch_index] = seed;
 
 
-  // Visualize projected distances
-  //direct_illum[launch_index] = make_float3( proj_dist/10.0 );
-
-  // Visualize SPP
-  //direct_illum[launch_index] = heatMap(spp/1000.);
-  
   // SPP
   //assuming 1:1 aspect
   for (int i = 0; i < 4; ++i) {
@@ -453,11 +415,14 @@ RT_PROGRAM void pinhole_camera_initial_sample() {
 
     float proj_dist = 2./image_dim.y * prd.t_hit*tan(fov/2.*M_PI/180.);
     float wvmax = omega_v_max[launch_index];
-    float alpha = 0.5;
+    float alpha = 1;
     float spp_term1 = proj_dist * wvmax/zpmin + alpha;
     float spp_term2 = 1+zpmax/zpmin;
 
     float spp = spp_term1*spp_term1 * wvmax*wvmax * spp_term2*spp_term2;
+
+	//divide by 4 because split hemispheres
+	spp *= 0.25;
 
     target_indirect_spp[cur_bucket_index] = spp;
 
@@ -469,13 +434,6 @@ RT_PROGRAM void pinhole_camera_continued_sample() {
   float3 cur_n = n[launch_index];
 
   int spp_sqrt = 4;
-  //int cur_spp = indirect_spp[launch_index];
-  //int target_spp = target_indirect_spp[launch_index];
-
-  //if (cur_spp > target_spp || cur_spp > max_spp)
-  //  return;
-  //indirect_spp[launch_index] += spp_sqrt*spp_sqrt;
-
   
   uint2 seed = indirect_rng_seeds[launch_index];
   float3 u,v,w;
