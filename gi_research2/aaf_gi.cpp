@@ -34,6 +34,10 @@
 #include <GLUTDisplay.h>
 #include <PPMLoader.h>
 #include <sampleConfig.h>
+#include <sstream>
+#include <iostream>
+#include <iomanip>
+#include <ObjLoader.h>
 
 #include "random.h"
 #include "aaf_gi.h"
@@ -113,8 +117,14 @@ private:
   unsigned int m_first_pass_spb_sqrt;
   unsigned int m_brute_spb;
   unsigned int m_max_spb_pass;
+
+  bool m_filter_indirect;
+  bool m_filter_z;
 };
 
+GIScene scene;
+int output_num = 0;
+const unsigned int num_buckets = 1;
 
 void GIScene::initScene( InitialCameraData& camera_data )
 {
@@ -138,10 +148,18 @@ void GIScene::initScene( InitialCameraData& camera_data )
 
   // Set up camera
   const float vfov = 35.f;
+  //sponza
+  camera_data = InitialCameraData( make_float3( 652.5f, 693.5f, 0.f ), // eye
+  make_float3( 614.0f, 654.0f, 0.0f ),    // lookat
+  make_float3( 0.0f, 1.0f,  0.0f ),       // up
+  35.0f );                                // vfov
+
+  /*
   camera_data = InitialCameraData( make_float3( 278.0f, 273.0f, -800.0f ), // eye
                                    make_float3( 278.0f, 273.0f, 0.0f ),    // lookat
                                    make_float3( 0.0f, 1.0f,  0.0f ),       // up
                                    vfov );                                // vfov
+								   */
 
   // Declare these so validation will pass
   m_context["eye"]->setFloat( make_float3( 0.0f, 0.0f, 0.0f ) );
@@ -196,7 +214,6 @@ void GIScene::initScene( InitialCameraData& camera_data )
 
 
   //AAF GI Buffers
-  const unsigned int num_buckets = 4;
   //Direct Illumination Buffer
   m_context["direct_illum"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
@@ -254,6 +271,15 @@ void GIScene::initScene( InitialCameraData& camera_data )
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT3, m_width, m_height*num_buckets));
 
+  //random numbers
+
+  Buffer indirect_rng_seeds = m_context->createBuffer(RT_BUFFER_INPUT, RT_FORMAT_UNSIGNED_INT2, m_width, m_height*num_buckets);
+  m_context["indirect_rng_seeds"]->set(indirect_rng_seeds);
+  uint2* seeds = reinterpret_cast<uint2*>( indirect_rng_seeds->map() );
+  for(unsigned int i = 0; i < m_width * m_height*num_buckets; ++i )
+  seeds[i] = random2u();
+  indirect_rng_seeds->unmap();
+
   //View Mode for displaying different buffers
   m_view_mode = 0;
   m_context["view_mode"]->setUint(m_view_mode);
@@ -265,11 +291,14 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context["first_pass_spb_sqrt"]->setUint(m_first_pass_spb_sqrt);
   m_context["brute_spb"]->setUint(m_brute_spb);
   m_context["max_spb_pass"]->setUint(m_max_spb_pass);
-  m_context["num_buckets"]->setUint(4);
-  m_context["z_filter_radius"]->setInt(3);
+  m_context["num_buckets"]->setUint(num_buckets);
+  m_context["z_filter_radius"]->setInt(2);
   m_context["indirect_ray_depth"]->setUint(1);
   m_context["pixel_radius"]->setInt(10);
 
+  //toggle settings
+  m_filter_indirect = true;
+  m_filter_z = true;
 
   
 
@@ -283,6 +312,39 @@ void GIScene::initScene( InitialCameraData& camera_data )
 
 bool GIScene::keyPressed( unsigned char key, int x, int y )
 {
+	switch(key)
+	{
+
+	case 'B':
+	case 'b':
+		m_filter_indirect = 1-m_filter_indirect;
+		if (m_filter_indirect)
+			std::cout << "Filter Indirect: On" << std::endl;
+		else
+			std::cout << "Filter Indirect: Off" << std::endl;
+		return true;
+	case 'N':
+	case 'n':
+		m_filter_z = 1-m_filter_z;
+		if (m_filter_z)
+			std::cout << "Filter z: On" << std::endl;
+		else
+			std::cout << "Filter z: Off" << std::endl;
+		return true;
+	case 'S':
+	case 's':
+		{
+			std::stringstream fname;
+			fname << "output_";
+			fname << std::setw(7) << std::setfill('0') << output_num;
+			fname << ".ppm";
+			Buffer output_buf = scene.getOutputBuffer();
+			sutilDisplayFilePPM(fname.str().c_str(), output_buf->get());
+			output_num++;
+			std::cout << "Saved file" << std::endl;
+			return true;
+		}	
+	}
   return false;
 }
 
@@ -314,11 +376,17 @@ void GIScene::trace( const RayGenCameraData& camera_data )
   }
   */
   m_context->launch( 0, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height));
-  m_context->launch( 1, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*4));
-  m_context->launch( 2, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*4));
-  m_context->launch( 3, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*4));
-  m_context->launch( 4, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*4));
-  m_context->launch( 5, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*4));
+  if (m_filter_z)
+  {
+	  m_context->launch( 1, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*num_buckets));
+	  m_context->launch( 2, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*num_buckets));
+  }
+  m_context->launch( 3, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*num_buckets));
+  if (m_filter_indirect)
+  {
+	  m_context->launch( 4, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*num_buckets));
+	  m_context->launch( 5, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*num_buckets));
+  }
   m_context->launch( 6, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height));
 }
 
@@ -394,6 +462,7 @@ void GIScene::setMaterial( GeometryInstance& gi,
 
 void GIScene::createGeometry()
 {
+	/*
   // Light buffer
   ParallelogramLight light;
   light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
@@ -512,6 +581,54 @@ void GIScene::createGeometry()
   GeometryGroup geometry_group = m_context->createGeometryGroup(gis.begin(), gis.end());
   geometry_group->setAcceleration( m_context->createAcceleration("Bvh","Bvh") );
   m_context["top_object"]->set( geometry_group );
+  */
+
+  
+  //sponza
+  ParallelogramLight light;
+  light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
+  light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
+  light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
+  light.normal   = normalize( cross(light.v1, light.v2) );
+  light.emission = make_float3( 15.0f, 15.0f, 5.0f );
+  
+  Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
+  light_buffer->setFormat( RT_FORMAT_USER );
+  light_buffer->setElementSize( sizeof( ParallelogramLight ) );
+  light_buffer->setSize( 1u );
+  memcpy( light_buffer->map(), &light, sizeof( light ) );
+  light_buffer->unmap();
+  m_context["lights"]->setBuffer( light_buffer ); 
+  
+  Group _top_grp = m_context->createGroup();
+  GeometryGroup sponza_geom_group = m_context->createGeometryGroup();
+  
+
+  Material diffuse = m_context->createMaterial();
+  Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", "aaf_gi.cu" ), "shadow" );
+  Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", "aaf_gi.cu" ), "closest_hit_direct" );
+  diffuse->setClosestHitProgram( 3, diffuse_p );
+  diffuse->setAnyHitProgram( 1, diffuse_ah );
+
+  diffuse["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
+  diffuse["obj_id"]->setInt(10);
+  
+  //ObjLoader * floor_loader = new ObjLoader( texpath("dabrovic-sponza/sponza.obj").c_str(), m_context, sponza_geom_group, floor_mat );
+  std::string objpath = std::string( sutilSamplesDir() ) + "/gi_research/data/crytek_sponza/sponza.obj";
+  ObjLoader * floor_loader = new ObjLoader( objpath.c_str(), m_context, sponza_geom_group, diffuse, true );
+  floor_loader->load();
+  floor_loader->load();
+  
+  
+  _top_grp->setChildCount(1);
+  _top_grp->setChild(0, sponza_geom_group);
+  
+  _top_grp->setAcceleration(m_context->createAcceleration("Bvh", "Bvh") );
+  _top_grp->getAcceleration()->setProperty("refit", "1");
+  
+  
+  m_context["top_object"]->set( _top_grp );
+  m_context["top_shadower"]->set( _top_grp );
 }
 
 //-----------------------------------------------------------------------------
@@ -593,7 +710,6 @@ int main( int argc, char** argv )
   if( !GLUTDisplay::isBenchmark() ) printUsageAndExit( argv[0], false );
 
   try {
-    GIScene scene;
     scene.setNumSamples( sqrt_num_samples );
     scene.setDimensions( width, height );
     GLUTDisplay::setProgressiveDrawingTimeout(timeout);

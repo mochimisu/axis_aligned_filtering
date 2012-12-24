@@ -140,7 +140,7 @@ rtBuffer<float3, 2>               world_loc;
 rtBuffer<float3, 2>               n;
 rtBuffer<float, 2>                depth;
 rtBuffer<char, 2>                 visible;
-rtDeclareVariable(float3,   Kd, , );
+//rtDeclareVariable(float3,   Kd, , );
 rtDeclareVariable(float3,   Ks, , );
 rtDeclareVariable(uint,  direct_ray_type, , );
 rtDeclareVariable(uint,  num_buckets, , );
@@ -149,6 +149,9 @@ rtDeclareVariable(float,  vfov, , );
 rtDeclareVariable(uint, max_spb_pass, , );
 rtDeclareVariable(uint, indirect_ray_depth, , );
 rtDeclareVariable(int, pixel_radius, , );
+
+rtDeclareVariable(float3, texcoord, attribute texcoord, ); 
+rtTextureSampler<float4, 2>   diffuse_map;  
 
 
 //Filter functions
@@ -169,6 +172,7 @@ __device__ __inline__ void indirectFilter(
     const float3& cur_world_loc,
     float3 cur_n,
     float cur_zpmin,
+	uint2 screen_index,
     int i,
     int j,
     const size_t2& buf_size,
@@ -178,18 +182,20 @@ __device__ __inline__ void indirectFilter(
   //const float dist_scale_threshold = 10.0f;
   const float z_thres = .1f;
   const float dist_threshold = 100.0f;
+  const float angle_threshold = 10.f * M_PI/180.0f;
 
   if (i > 0 && i < buf_size.x && j > 0 && j < buf_size.y) {
     uint2 target_index = make_uint2(i,j);
-    uint2 target_bucket_index = make_uint2(i,4*j+bucket);
+    uint2 target_bucket_index = make_uint2(i,num_buckets*j+bucket);
     float3 target_indirect = indirect_illum[target_bucket_index];
     if (pass == 1)
       target_indirect = indirect_illum_filter1d[target_bucket_index];
     float target_zpmin = z_dist[target_bucket_index].x;
-    float3 target_n = n[target_index];
-    bool use_filt = visible[target_index];
+    float3 target_n = n[screen_index];
+    bool use_filt = visible[screen_index];
 
     if (use_filt 
+		&& acos(dot(target_n, cur_n)) < angle_threshold
         //&& abs((1./target_zpmin - 1./cur_zpmin)/(1./target_zpmin + 1./cur_zpmin)) < z_thres
         //&& abs((target_zpmin - cur_zpmin)/(target_zpmin + cur_zpmin)) < z_thres
         //&& (1/target_zpmin - 1/cur_zpmin) < dist_scale_threshold
@@ -197,11 +203,13 @@ __device__ __inline__ void indirectFilter(
     {
       float3 target_loc = world_loc[target_index];
       float3 diff = cur_world_loc - target_loc;
-      float euclidean_distsq = dot(diff,diff);
+	  float euclidean_distsq = dot(diff,diff);
+	  float rDn = dot(diff, cur_n);
+	  float proj_distsq = euclidean_distsq - rDn*rDn;
 
       if (euclidean_distsq < (dist_threshold*dist_threshold))
       {
-        float weight = gaussFilter(euclidean_distsq, 2.f/cur_zpmin);
+        float weight = gaussFilter(proj_distsq, 2.f*(1+100.*acos(dot(n[target_index],n[screen_index])))/cur_zpmin);
 
         blurred_indirect_sum += weight * target_indirect;
         sum_weight += weight;
@@ -225,6 +233,8 @@ RT_PROGRAM void closest_hit_direct()
   prd_direct.z_dist = t_hit;
   prd_direct.world_loc = hit_point;
   prd_direct.norm = ffnormal;
+  float2 uv                     = make_float2(texcoord);
+  float3 Kd = make_float3(tex2D(diffuse_map, uv.x, uv.y));
   prd_direct.Kd = Kd;
   prd_direct.Ks = Ks;
 
@@ -244,7 +254,7 @@ RT_PROGRAM void closest_hit_direct()
     float weight=nDl / 15.f;// / (M_PIf*Ldist*Ldist);
 
     // cast shadow ray
-    if ( nDl > 0.0f && LnDl > 0.0f ) {
+    if ( nDl > 0.0f ) {
       PerRayData_pathtrace_shadow shadow_prd;
       shadow_prd.inShadow = false;
       Ray shadow_ray = make_Ray( hit_point, L, pathtrace_shadow_ray_type, 
@@ -322,7 +332,7 @@ RT_PROGRAM void sample_direct_z()
       float3 sample_dir;
       float2 rand_samp = make_float2(rnd(seed),rnd(seed));
       //vary theta component of sampling to sample split hemisphere
-      rand_samp.x = (bucket + rand_samp.y)/num_buckets;
+      //rand_samp.x = (bucket + rand_samp.y)/num_buckets;
       //dont accept "grazing" angles
       rand_samp.y *= 0.95;
       sampleUnitHemisphere(rand_samp, n_u, n_v, n_w, sample_dir);
@@ -406,6 +416,8 @@ RT_PROGRAM void sample_indirect()
     * 1.f/num_buckets;
 
   spp = max(min(spp, (float)max_spb_pass),1.f);
+  int spp_int = (int) spp;
+  //spp_int = 20;
 
   float3 first_hit = world_loc[screen_index];
   float3 normal = n[screen_index];
@@ -415,7 +427,7 @@ RT_PROGRAM void sample_indirect()
   PerRayData_direct prd;
   float3 incoming_indirect;
   unsigned int seed = tea<16>(bucket.x*launch_index.y+launch_index.x, frame_number); //TODO :verify
-  for (int samp = 0; samp < spp; ++samp)
+  for (int samp = 0; samp < spp_int; ++samp)
   {
     float3 ray_origin = first_hit;
     float3 ray_n = normal;
@@ -427,7 +439,7 @@ RT_PROGRAM void sample_indirect()
       prd.hit = false;
       createONB(ray_n, rn_u, rn_v, rn_w);
       float2 rand_samp = make_float2(rnd(seed), rnd(seed));
-      rand_samp.x = (cur_bucket + rand_samp.y)/num_buckets;
+      //rand_samp.x = (cur_bucket + rand_samp.y)/num_buckets;
       sampleUnitHemisphere(rand_samp, rn_u, rn_v, rn_w, sample_dir);
       Ray ray = make_Ray(ray_origin, sample_dir,
           direct_ray_type, scene_epsilon, RT_DEFAULT_MAX);
@@ -438,7 +450,7 @@ RT_PROGRAM void sample_indirect()
     }
     incoming_indirect += sample_color;
   }
-  incoming_indirect /= spp;
+  incoming_indirect /= spp_int;
   
   indirect_illum[launch_index] = incoming_indirect;
 
@@ -464,7 +476,8 @@ RT_PROGRAM void indirect_filter_first_pass()
     if (visible[screen_index])
     {
       indirectFilter(blurred_indirect_sum, sum_weight,
-          cur_world_loc, cur_n, cur_zmin, screen_index.x+i, screen_index.y,
+          cur_world_loc, cur_n, cur_zmin, screen_index,
+		  screen_index.x+i, screen_index.y,
           buf_size, 0, cur_bucket);
     }
   }
@@ -493,7 +506,8 @@ RT_PROGRAM void indirect_filter_second_pass()
     if (visible[screen_index])
     {
       indirectFilter(blurred_indirect_sum, sum_weight,
-          cur_world_loc, cur_n, cur_zmin, screen_index.x, screen_index.y+i,
+          cur_world_loc, cur_n, cur_zmin, screen_index,
+		  screen_index.x, screen_index.y+i,
           buf_size, 1, cur_bucket);
     }
   }
@@ -505,6 +519,27 @@ RT_PROGRAM void indirect_filter_second_pass()
 
 
 }
+
+// HeatMap visualization
+__device__ __inline__ float3 heatMap(float val) {
+float fraction;
+if (val < 0.0f)
+fraction = -1.0f;
+else if (val > 1.0f)
+fraction = 1.0f;
+else
+fraction = 2.0f * val - 1.0f;
+
+if (fraction < -0.5f)
+return make_float3(0.0f, 2*(fraction+1.0f), 1.0f);
+else if (fraction < 0.0f)
+return make_float3(0.0f, 1.0f, 1.0f - 2.0f * (fraction + 0.5f));
+else if (fraction < 0.5f)
+return make_float3(2.0f * fraction, 1.0f, 0.0f);
+else
+return make_float3(1.0f, 1.0f - 2.0f*(fraction - 0.5f), 0.0f);
+}
+
 RT_PROGRAM void display()
 {
   //output_buffer[launch_index] = make_float4(direct_illum[launch_index],1.);
@@ -516,9 +551,12 @@ RT_PROGRAM void display()
     indirect_illum_combined += indirect_illum[make_uint2(launch_index.x, 
         launch_index.y*num_buckets+i)];
   }
+
   indirect_illum_combined *= Kd_image[launch_index]/num_buckets;
   output_buffer[launch_index] = make_float4(indirect_illum_combined+direct_illum[launch_index],1);
   output_buffer[launch_index] = make_float4(indirect_illum_combined,1);
+
+  //output_buffer[launch_index] = make_float4(heatMap(z_dist[make_uint2(launch_index.x, launch_index.y*num_buckets)].x/500.),1);
   //output_buffer[launch_index] = make_float4(direct_illum[launch_index],1.);
   //output_buffer[launch_index] = make_float4(z_dist[make_uint2(launch_index.x, launch_index.y*num_buckets)].x/10000.);
   //output_buffer[launch_index] = make_float4(direct_illum[launch_index],1);

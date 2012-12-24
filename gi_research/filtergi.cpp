@@ -26,7 +26,7 @@
 
 using namespace optix;
 unsigned int width = 1080u, height = 720u;
-float fov = 60.f;
+float fov = 35.f;
 
 class FilterGI : public SampleScene
 {
@@ -138,7 +138,7 @@ private:
 FilterGI* _scene;
 int output_num = 0;
 
-uint max_spp = 100;//250;
+uint max_spp = 15;//250;
 
 void FilterGI::initScene( InitialCameraData& camera_data )
 {
@@ -153,7 +153,7 @@ void FilterGI::initScene( InitialCameraData& camera_data )
 
   // context 
   m_context->setRayTypeCount( 3 );
-  m_context->setEntryPointCount( 5 );
+  m_context->setEntryPointCount( 7 );
   m_context->setStackSize( 8000 );
 
   m_context["max_depth"]->setInt(100);
@@ -216,6 +216,12 @@ void FilterGI::initScene( InitialCameraData& camera_data )
 
   Buffer zpmin = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT2, _width, _height*4);
   m_context["z_perp"]->set(zpmin);
+  Buffer zpminf = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT2, _width, _height*4);
+  m_context["z_perp_filter1d"]->set(zpminf);
+  Buffer zpmino = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT2, _width, _height*4);
+  m_context["z_perp_orig"]->set(zpmino);
+  Buffer depthb = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT, _width, _height);
+  m_context["depth"]->set(depthb);
 
   Buffer indirect_spp = m_context->createBuffer( RT_BUFFER_INPUT_OUTPUT, RT_FORMAT_FLOAT, _width, _height*4);
   m_context["indirect_spp"]->set(indirect_spp);
@@ -322,6 +328,12 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   m_context->setRayGenerationProgram( 4, continued_sample_program );
 
 
+// second sampling
+Program zf_fp = m_context->createProgramFromPTXFile( _ptx_path, "z_filter_first_pass" );
+m_context->setRayGenerationProgram( 5, zf_fp );
+Program zf_sp = m_context->createProgramFromPTXFile( _ptx_path, "z_filter_second_pass" );
+m_context->setRayGenerationProgram( 6, zf_sp );
+
   // Display program
   std::string display_name;
   display_name = "display_camera";
@@ -344,6 +356,7 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   float3 pos1 = make_float3(1.5, 16, 8);
   float3 pos2 = make_float3(-4.5, 21.8284, 3.8284);
 
+  //float3 pos   = make_float3( 343.0f, 548.6f, 227.0f);
   float3 pos   = make_float3( 343.0f, 548.6f, 227.0f);
 
   BasicLight lights[] = {
@@ -368,8 +381,10 @@ void FilterGI::initScene( InitialCameraData& camera_data )
   // Set up camera
 
     //sponza
-  camera_data = InitialCameraData( make_float3( 652.5f, 693.5f, 0.f ), // eye
-      make_float3( 614.0f, 654.0f, 0.0f ),    // lookat
+  //camera_data = InitialCameraData( make_float3( 652.5f, 693.5f, 0.f ), // eye
+  //make_float3( 614.0f, 654.0f, 0.0f ),    // lookat
+  camera_data = InitialCameraData( make_float3( -542.f, 520.f, 162.f ), // eye
+  make_float3( 166.f, 202.f, 251.f ),    // lookat
       make_float3( 0.0f, 1.0f,  0.0f ),       // up
       35.0f );                                // vfov
   /* cornell box
@@ -476,11 +491,19 @@ void FilterGI::trace( const RayGenCameraData& camera_data )
 
   //Initial 16 Samples
   if (_frame_number == 0)
+  {
     m_context->launch( 0, static_cast<unsigned int>(buffer_width),
       static_cast<unsigned int>(buffer_height) );
+  }
   else
-    m_context->launch( 4, static_cast<unsigned int>(buffer_width),
+  {
+  m_context->launch( 5, static_cast<unsigned int>(buffer_width),
+  static_cast<unsigned int>(buffer_height*4) );
+  m_context->launch( 6, static_cast<unsigned int>(buffer_width),
+  static_cast<unsigned int>(buffer_height*4) );
+	  m_context->launch( 4, static_cast<unsigned int>(buffer_width),
       static_cast<unsigned int>(buffer_height) );
+  }
   //filter indirect
   m_context->launch( 2, static_cast<unsigned int>(buffer_width),
     static_cast<unsigned int>(buffer_height) );
@@ -949,7 +972,8 @@ void FilterGI::createGeometry()
 
   //sponza
   BasicLight light;
-  light.pos = make_float3( 580.f, 680.f, 0.f);
+  //light.pos = make_float3( 580.f, 680.f, 0.f);
+  light.pos = make_float3( 580.f, 500.f, 0.f);
     Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
   light_buffer->setFormat( RT_FORMAT_USER );
   light_buffer->setElementSize( sizeof( BasicLight ) );
@@ -968,8 +992,9 @@ void FilterGI::createGeometry()
   floor_mat["obj_id"]->setInt(10);
 
   //ObjLoader * floor_loader = new ObjLoader( texpath("dabrovic-sponza/sponza.obj").c_str(), m_context, sponza_geom_group, floor_mat );
-  ObjLoader * floor_loader = new ObjLoader( texpath("crytek_sponza/sponza.obj").c_str(), m_context, sponza_geom_group, floor_mat, true );
-  floor_loader->load();
+  //ObjLoader * floor_loader = new ObjLoader( texpath("crytek_sponza/sponza.obj").c_str(), m_context, sponza_geom_group, floor_mat, true );
+  ObjLoader * floor_loader = new ObjLoader( texpath("conference/conference.obj").c_str(), m_context, sponza_geom_group, floor_mat, true );
+  //floor_loader->load();
   floor_loader->load();
 
 
