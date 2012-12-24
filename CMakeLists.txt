@@ -302,6 +302,7 @@ endfunction()
 #add_subdirectory(zoneplate)
 #add_subdirectory(arealight_research)
 add_subdirectory(gi_research)
+add_subdirectory(gi_research2)
 
 # Our sutil library.  The rules to build it are found in the subdirectory.
 add_subdirectory(sutil)
