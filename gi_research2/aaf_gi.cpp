@@ -124,7 +124,7 @@ private:
 
 GIScene scene;
 int output_num = 0;
-const unsigned int num_buckets = 1;
+const unsigned int num_buckets = 4;
 
 void GIScene::initScene( InitialCameraData& camera_data )
 {
@@ -148,18 +148,18 @@ void GIScene::initScene( InitialCameraData& camera_data )
 
   // Set up camera
   const float vfov = 35.f;
+  /*
   //sponza
   camera_data = InitialCameraData( make_float3( 652.5f, 693.5f, 0.f ), // eye
   make_float3( 614.0f, 654.0f, 0.0f ),    // lookat
   make_float3( 0.0f, 1.0f,  0.0f ),       // up
   35.0f );                                // vfov
+  */
 
-  /*
   camera_data = InitialCameraData( make_float3( 278.0f, 273.0f, -800.0f ), // eye
                                    make_float3( 278.0f, 273.0f, 0.0f ),    // lookat
                                    make_float3( 0.0f, 1.0f,  0.0f ),       // up
                                    vfov );                                // vfov
-								   */
 
   // Declare these so validation will pass
   m_context["eye"]->setFloat( make_float3( 0.0f, 0.0f, 0.0f ) );
@@ -270,6 +270,11 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context["indirect_illum_filter1d"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT3, m_width, m_height*num_buckets));
+
+  //debug buffer
+  m_context["debug_buf"]->set(
+      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+        RT_FORMAT_FLOAT3, m_width, m_height));
 
   //random numbers
 
@@ -462,7 +467,7 @@ void GIScene::setMaterial( GeometryInstance& gi,
 
 void GIScene::createGeometry()
 {
-	/*
+	
   // Light buffer
   ParallelogramLight light;
   light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
@@ -581,8 +586,8 @@ void GIScene::createGeometry()
   GeometryGroup geometry_group = m_context->createGeometryGroup(gis.begin(), gis.end());
   geometry_group->setAcceleration( m_context->createAcceleration("Bvh","Bvh") );
   m_context["top_object"]->set( geometry_group );
-  */
 
+  /*
   
   //sponza
   ParallelogramLight light;
@@ -617,7 +622,6 @@ void GIScene::createGeometry()
   std::string objpath = std::string( sutilSamplesDir() ) + "/gi_research/data/crytek_sponza/sponza.obj";
   ObjLoader * floor_loader = new ObjLoader( objpath.c_str(), m_context, sponza_geom_group, diffuse, true );
   floor_loader->load();
-  floor_loader->load();
   
   
   _top_grp->setChildCount(1);
@@ -629,6 +633,7 @@ void GIScene::createGeometry()
   
   m_context["top_object"]->set( _top_grp );
   m_context["top_shadower"]->set( _top_grp );
+  */
 }
 
 //-----------------------------------------------------------------------------

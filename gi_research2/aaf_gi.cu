@@ -140,7 +140,7 @@ rtBuffer<float3, 2>               world_loc;
 rtBuffer<float3, 2>               n;
 rtBuffer<float, 2>                depth;
 rtBuffer<char, 2>                 visible;
-//rtDeclareVariable(float3,   Kd, , );
+rtDeclareVariable(float3,   Kd, , );
 rtDeclareVariable(float3,   Ks, , );
 rtDeclareVariable(uint,  direct_ray_type, , );
 rtDeclareVariable(uint,  num_buckets, , );
@@ -150,8 +150,10 @@ rtDeclareVariable(uint, max_spb_pass, , );
 rtDeclareVariable(uint, indirect_ray_depth, , );
 rtDeclareVariable(int, pixel_radius, , );
 
-rtDeclareVariable(float3, texcoord, attribute texcoord, ); 
-rtTextureSampler<float4, 2>   diffuse_map;  
+rtBuffer<float3, 2>                 debug_buf;
+
+//rtDeclareVariable(float3, texcoord, attribute texcoord, ); 
+//rtTextureSampler<float4, 2>   diffuse_map;  
 
 
 //Filter functions
@@ -233,8 +235,8 @@ RT_PROGRAM void closest_hit_direct()
   prd_direct.z_dist = t_hit;
   prd_direct.world_loc = hit_point;
   prd_direct.norm = ffnormal;
-  float2 uv                     = make_float2(texcoord);
-  float3 Kd = make_float3(tex2D(diffuse_map, uv.x, uv.y));
+  //float2 uv                     = make_float2(texcoord);
+  //float3 Kd = make_float3(tex2D(diffuse_map, uv.x, uv.y));
   prd_direct.Kd = Kd;
   prd_direct.Ks = Ks;
 
@@ -251,7 +253,7 @@ RT_PROGRAM void closest_hit_direct()
     float nDl = max(dot(ffnormal, L),0.f);
     float A = length(cross(light.v1, light.v2));
     float LnDl = dot( light.normal, L );
-    float weight=nDl / 15.f;// / (M_PIf*Ldist*Ldist);
+    float weight=nDl;// / (M_PIf*Ldist*Ldist);
 
     // cast shadow ray
     if ( nDl > 0.0f ) {
@@ -289,6 +291,8 @@ RT_PROGRAM void sample_direct_z()
 
   PerRayData_direct dir_samp;
   dir_samp.hit = false;
+
+  debug_buf[launch_index] = make_float3(0);
 
   Ray ray = make_Ray(ray_origin, ray_direction, direct_ray_type, 
       scene_epsilon, RT_DEFAULT_MAX);
@@ -424,16 +428,16 @@ RT_PROGRAM void sample_indirect()
   float3 Kd = Kd_image[screen_index];
 
   //sample this hemisphere according to our spp
-  PerRayData_direct prd;
   float3 incoming_indirect;
   unsigned int seed = tea<16>(bucket.x*launch_index.y+launch_index.x, frame_number); //TODO :verify
   for (int samp = 0; samp < spp_int; ++samp)
   {
+    PerRayData_direct prd;
     float3 ray_origin = first_hit;
     float3 ray_n = normal;
     float3 rn_u, rn_v, rn_w;
     float3 sample_dir;
-    float3 sample_color;
+    float3 sample_color = make_float3(0);
     for (int depth = 0; depth < indirect_ray_depth; ++depth)
     {
       prd.hit = false;
@@ -445,14 +449,18 @@ RT_PROGRAM void sample_indirect()
           direct_ray_type, scene_epsilon, RT_DEFAULT_MAX);
       rtTrace(top_object, ray, prd);
       if (!prd.hit)
-        continue;
+        break;
       sample_color += prd.incoming_direct_light * prd.Kd;
+      ray_origin = prd.world_loc;
+      ray_n = prd.norm;
     }
     incoming_indirect += sample_color;
   }
-  incoming_indirect /= spp_int;
+  incoming_indirect /= (float)spp_int;
   
   indirect_illum[launch_index] = incoming_indirect;
+
+
 
   //output_buffer[screen_index] = make_float4(spp/100.f);
 
@@ -553,8 +561,9 @@ RT_PROGRAM void display()
   }
 
   indirect_illum_combined *= Kd_image[launch_index]/num_buckets;
-  output_buffer[launch_index] = make_float4(indirect_illum_combined+direct_illum[launch_index],1);
+  //output_buffer[launch_index] = make_float4(indirect_illum_combined+direct_illum[launch_index],1);
   output_buffer[launch_index] = make_float4(indirect_illum_combined,1);
+  output_buffer[launch_index] += make_float4(debug_buf[launch_index],1);
 
   //output_buffer[launch_index] = make_float4(heatMap(z_dist[make_uint2(launch_index.x, launch_index.y*num_buckets)].x/500.),1);
   //output_buffer[launch_index] = make_float4(direct_illum[launch_index],1.);
