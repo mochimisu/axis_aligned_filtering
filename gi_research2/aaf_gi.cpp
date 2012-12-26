@@ -303,9 +303,7 @@ void GIScene::initScene( InitialCameraData& camera_data )
 
   //toggle settings
   m_filter_indirect = true;
-  m_filter_z = true;
-
-  
+  m_filter_z = false;
 
   // Create scene geometry
   createGeometry();
@@ -380,17 +378,18 @@ void GIScene::trace( const RayGenCameraData& camera_data )
         );
   }
   */
+  unsigned int bucket_buffer_height = buffer_height * num_buckets;
   m_context->launch( 0, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height));
   if (m_filter_z)
   {
-	  m_context->launch( 1, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*num_buckets));
-	  m_context->launch( 2, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*num_buckets));
+	  m_context->launch( 1, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(bucket_buffer_height));
+	  m_context->launch( 2, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(bucket_buffer_height));
   }
-  m_context->launch( 3, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*num_buckets));
+  m_context->launch( 3, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(bucket_buffer_height));
   if (m_filter_indirect)
   {
-	  m_context->launch( 4, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*num_buckets));
-	  m_context->launch( 5, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height*num_buckets));
+	  m_context->launch( 4, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(bucket_buffer_height));
+	  m_context->launch( 5, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(bucket_buffer_height));
   }
   m_context->launch( 6, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height));
 }
@@ -717,9 +716,10 @@ int main( int argc, char** argv )
   try {
     scene.setNumSamples( sqrt_num_samples );
     scene.setDimensions( width, height );
-    GLUTDisplay::setProgressiveDrawingTimeout(timeout);
+    GLUTDisplay::setProgressiveDrawingTimeout(0);
     GLUTDisplay::setUseSRGB(true);
-    GLUTDisplay::run( "Cornell Box Scene", &scene, GLUTDisplay::CDProgressive );
+    GLUTDisplay::run( "Axis-Aligned Filtering: Global Illumination", 
+        &scene, GLUTDisplay::CDProgressive );
   } catch( Exception& e ){
     sutilReportError( e.getErrorString().c_str() );
     exit(1);

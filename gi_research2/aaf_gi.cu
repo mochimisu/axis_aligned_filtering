@@ -174,7 +174,6 @@ __device__ __inline__ void indirectFilter(
     const float3& cur_world_loc,
     float3 cur_n,
     float cur_zpmin,
-	uint2 screen_index,
     int i,
     int j,
     const size_t2& buf_size,
@@ -193,11 +192,11 @@ __device__ __inline__ void indirectFilter(
     if (pass == 1)
       target_indirect = indirect_illum_filter1d[target_bucket_index];
     float target_zpmin = z_dist[target_bucket_index].x;
-    float3 target_n = n[screen_index];
-    bool use_filt = visible[screen_index];
+    float3 target_n = n[target_index];
+    bool use_filt = visible[target_index];
 
     if (use_filt 
-		&& acos(dot(target_n, cur_n)) < angle_threshold
+        && abs(acos(dot(target_n, cur_n))) < angle_threshold
         //&& abs((1./target_zpmin - 1./cur_zpmin)/(1./target_zpmin + 1./cur_zpmin)) < z_thres
         //&& abs((target_zpmin - cur_zpmin)/(target_zpmin + cur_zpmin)) < z_thres
         //&& (1/target_zpmin - 1/cur_zpmin) < dist_scale_threshold
@@ -205,13 +204,13 @@ __device__ __inline__ void indirectFilter(
     {
       float3 target_loc = world_loc[target_index];
       float3 diff = cur_world_loc - target_loc;
-	  float euclidean_distsq = dot(diff,diff);
-	  float rDn = dot(diff, cur_n);
-	  float proj_distsq = euclidean_distsq - rDn*rDn;
+      float euclidean_distsq = dot(diff,diff);
+      float rDn = dot(diff, cur_n);
+      float proj_distsq = euclidean_distsq - rDn*rDn;
 
       if (euclidean_distsq < (dist_threshold*dist_threshold))
       {
-        float weight = gaussFilter(proj_distsq, 2.f*(1+100.*acos(dot(n[target_index],n[screen_index])))/cur_zpmin);
+        float weight = gaussFilter(proj_distsq, 2.f*(1+50.*acos(dot(target_n,cur_n)))/cur_zpmin);
 
         blurred_indirect_sum += weight * target_indirect;
         sum_weight += weight;
@@ -336,7 +335,7 @@ RT_PROGRAM void sample_direct_z()
       float3 sample_dir;
       float2 rand_samp = make_float2(rnd(seed),rnd(seed));
       //vary theta component of sampling to sample split hemisphere
-      //rand_samp.x = (bucket + rand_samp.y)/num_buckets;
+      rand_samp.x = (bucket + rand_samp.x)/num_buckets;
       //dont accept "grazing" angles
       rand_samp.y *= 0.95;
       sampleUnitHemisphere(rand_samp, n_u, n_v, n_w, sample_dir);
@@ -416,12 +415,13 @@ RT_PROGRAM void sample_indirect()
   float spp_term1 = proj_dist * wvmax/cur_zd.x + alpha;
   float spp_term2 = 1+cur_zd.y/cur_zd.x;
 
-  float spp = spp_term1*spp_term1 * wvmax*wvmax * spp_term2*spp_term2 
-    * 1.f/num_buckets;
+  float spp = spp_term1*spp_term1 * wvmax*wvmax * spp_term2*spp_term2;
+  
+  //account for split buckets
+  spp /= num_buckets;
 
   spp = max(min(spp, (float)max_spb_pass),1.f);
   int spp_int = (int) spp;
-  //spp_int = 20;
 
   float3 first_hit = world_loc[screen_index];
   float3 normal = n[screen_index];
@@ -443,7 +443,7 @@ RT_PROGRAM void sample_indirect()
       prd.hit = false;
       createONB(ray_n, rn_u, rn_v, rn_w);
       float2 rand_samp = make_float2(rnd(seed), rnd(seed));
-      //rand_samp.x = (cur_bucket + rand_samp.y)/num_buckets;
+      rand_samp.x = (cur_bucket + rand_samp.x)/num_buckets;
       sampleUnitHemisphere(rand_samp, rn_u, rn_v, rn_w, sample_dir);
       Ray ray = make_Ray(ray_origin, sample_dir,
           direct_ray_type, scene_epsilon, RT_DEFAULT_MAX);
@@ -459,10 +459,6 @@ RT_PROGRAM void sample_indirect()
   incoming_indirect /= (float)spp_int;
   
   indirect_illum[launch_index] = incoming_indirect;
-
-
-
-  //output_buffer[screen_index] = make_float4(spp/100.f);
 
 }
 RT_PROGRAM void indirect_filter_first_pass()
@@ -484,8 +480,8 @@ RT_PROGRAM void indirect_filter_first_pass()
     if (visible[screen_index])
     {
       indirectFilter(blurred_indirect_sum, sum_weight,
-          cur_world_loc, cur_n, cur_zmin, screen_index,
-		  screen_index.x+i, screen_index.y,
+          cur_world_loc, cur_n, cur_zmin,
+          screen_index.x+i, screen_index.y,
           buf_size, 0, cur_bucket);
     }
   }
@@ -514,8 +510,8 @@ RT_PROGRAM void indirect_filter_second_pass()
     if (visible[screen_index])
     {
       indirectFilter(blurred_indirect_sum, sum_weight,
-          cur_world_loc, cur_n, cur_zmin, screen_index,
-		  screen_index.x, screen_index.y+i,
+          cur_world_loc, cur_n, cur_zmin,
+          screen_index.x, screen_index.y+i,
           buf_size, 1, cur_bucket);
     }
   }
@@ -563,10 +559,11 @@ RT_PROGRAM void display()
   indirect_illum_combined *= Kd_image[launch_index]/num_buckets;
   //output_buffer[launch_index] = make_float4(indirect_illum_combined+direct_illum[launch_index],1);
   output_buffer[launch_index] = make_float4(indirect_illum_combined,1);
-  output_buffer[launch_index] += make_float4(debug_buf[launch_index],1);
+  //output_buffer[launch_index] += make_float4(debug_buf[launch_index],1);
 
   //output_buffer[launch_index] = make_float4(heatMap(z_dist[make_uint2(launch_index.x, launch_index.y*num_buckets)].x/500.),1);
   //output_buffer[launch_index] = make_float4(direct_illum[launch_index],1.);
   //output_buffer[launch_index] = make_float4(z_dist[make_uint2(launch_index.x, launch_index.y*num_buckets)].x/10000.);
   //output_buffer[launch_index] = make_float4(direct_illum[launch_index],1);
+  //output_buffer[launch_index] = make_float4(n[launch_index],1);
 }
