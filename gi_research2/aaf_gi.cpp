@@ -386,7 +386,8 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
           std::cout << "View mode: Target SPP/SPB" << std::endl;
           break;
         case 7:
-          std::cout << "View mode: Target SPP/SPB (theoretical/unclamped)" << std::endl;
+          std::cout << "View mode: Target SPP/SPB (theoretical/unclamped)" 
+            << std::endl;
           break;
       }
       return true;
@@ -523,19 +524,26 @@ void GIScene::trace( const RayGenCameraData& camera_data )
   }
   */
   RTsize bucket_buffer_height = buffer_height * num_buckets;
-  m_context->launch( 0, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height));
+  m_context->launch( 0, static_cast<unsigned int>(buffer_width), 
+      static_cast<unsigned int>(buffer_height));
   if (m_filter_z)
   {
-	  m_context->launch( 1, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(bucket_buffer_height));
-	  m_context->launch( 2, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(bucket_buffer_height));
+	  m_context->launch( 1, static_cast<unsigned int>(buffer_width), 
+        static_cast<unsigned int>(bucket_buffer_height));
+	  m_context->launch( 2, static_cast<unsigned int>(buffer_width), 
+        static_cast<unsigned int>(bucket_buffer_height));
   }
-  m_context->launch( 3, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(bucket_buffer_height));
+  m_context->launch( 3, static_cast<unsigned int>(buffer_width),
+      static_cast<unsigned int>(bucket_buffer_height));
   if (m_filter_indirect)
   {
-	  m_context->launch( 4, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(bucket_buffer_height));
-	  m_context->launch( 5, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(bucket_buffer_height));
+	  m_context->launch( 4, static_cast<unsigned int>(buffer_width), 
+        static_cast<unsigned int>(bucket_buffer_height));
+	  m_context->launch( 5, static_cast<unsigned int>(buffer_width), 
+        static_cast<unsigned int>(bucket_buffer_height));
   }
-  m_context->launch( 6, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height));
+  m_context->launch( 6, static_cast<unsigned int>(buffer_width), 
+      static_cast<unsigned int>(buffer_height));
 #ifdef DEBUG_BUF
   if (m_view_mode > 3)
   {
@@ -573,7 +581,8 @@ void GIScene::trace( const RayGenCameraData& camera_data )
     }
     m_context["max_heatmap"]->setFloat(m_max_heatmap_val);
     
-    m_context->launch( 7, static_cast<unsigned int>(buffer_width), static_cast<unsigned int>(buffer_height));
+    m_context->launch( 7, static_cast<unsigned int>(buffer_width), 
+        static_cast<unsigned int>(buffer_height));
   }
 #endif
 
@@ -613,9 +622,9 @@ GeometryInstance GIScene::createParallelogram( const float3& anchor,
 }
 
 GeometryInstance GIScene::createLightParallelogram( const float3& anchor,
-                                                            const float3& offset1,
-                                                            const float3& offset2,
-                                                            int lgt_instance)
+    const float3& offset1,
+    const float3& offset2,
+    int lgt_instance)
 {
   Geometry parallelogram = m_context->createGeometry();
   parallelogram->setPrimitiveCount( 1u );
@@ -658,10 +667,12 @@ void GIScene::createSceneCornell(InitialCameraData& camera_data)
   const float vfov = 35.f;
 
   //cornell
-  camera_data = InitialCameraData( make_float3( 278.0f, 273.0f, -800.0f ), // eye
-                                   make_float3( 278.0f, 273.0f, 0.0f ),    // lookat
-                                   make_float3( 0.0f, 1.0f,  0.0f ),       // up
-                                   vfov );                                // vfov
+  camera_data = InitialCameraData( 
+      make_float3( 278.0f, 273.0f, -800.0f ), // eye
+      make_float3( 278.0f, 273.0f, 0.0f ),    // lookat
+      make_float3( 0.0f, 1.0f,  0.0f ),       // up
+      vfov );                                // vfov
+
   // Light buffer
   ParallelogramLight light;
   light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
@@ -687,9 +698,12 @@ void GIScene::createSceneCornell(InitialCameraData& camera_data)
   diffuse->setAnyHitProgram( 1, diffuse_ah );
   
   //dummy texture maps
-  diffuse["ambient_map"]->setTextureSampler( loadTexture( m_context, "", make_float3( 0.2f, 0.2f, 0.2f ) ) );
-  diffuse["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", make_float3( 0.8f, 0.8f, 0.8f ) ) );
-  diffuse["specular_map"]->setTextureSampler( loadTexture( m_context, "", make_float3( 0.0f, 0.0f, 0.0f ) ) );
+  diffuse["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.2f, 0.2f, 0.2f ) ) );
+  diffuse["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.8f, 0.8f, 0.8f ) ) );
+  diffuse["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.0f, 0.0f, 0.0f ) ) );
 
   // Set up parallelogram programs
   std::string ptx_path = ptxpath( "aaf_gi", "parallelogram.cu" );
@@ -910,12 +924,20 @@ void printUsageAndExit( const std::string& argv0, bool doExit = true )
   std::cerr
     << "Usage  : " << argv0 << " [options]\n"
     << "App options:\n"
-    << "  -h  | --help                               Print this usage message\n"
-    << " -rrd | --rr-begin-depth <d>                 Start Russian Roulette killing of rays at depth <d>\n"
-    << "  -md | --max-depth <d>                      Maximum ray tree depth\n"
-    << "  -n  | --sqrt_num_samples <ns>              Number of samples to perform for each frame\n"
-    << "  -t  | --timeout <sec>                      Seconds before stopping rendering. Set to 0 for no stopping.\n"
+    << "  -h  | --help                               "
+    << "Print this usage message\n"
+
+    << " -rrd | --rr-begin-depth <d>                 "
+    << "Start Russian Roulette killing of rays at depth <d>\n"
+
+    << "  -md | --max-depth <d>                      "
+    << "Maximum ray tree depth\n"
+    << "  -n  | --sqrt_num_samples <ns>              "
+    << "Number of samples to perform for each frame\n"
+    << "  -t  | --timeout <sec>                      "
+    << "Seconds before stopping rendering. Set to 0 for no stopping.\n"
     << std::endl;
+
   std::cout
     << "Axis-Aligned Filtering key bindings: " << std::endl
     << "b: Toggle indirect illumination filtering" << std::endl
