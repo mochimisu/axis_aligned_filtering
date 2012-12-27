@@ -58,7 +58,8 @@ using namespace optix;
 namespace {
   std::string ptxpath( const std::string& base )
   {
-    return std::string(sutilSamplesPtxDir()) + "/aaf_gi_generated_" + base + ".ptx";
+    return std::string(sutilSamplesPtxDir()) + "/aaf_gi_generated_" + 
+      base + ".ptx";
   }
 }
 
@@ -84,8 +85,12 @@ public:
   virtual void   trace( const RayGenCameraData& camera_data );
   virtual Buffer getOutputBuffer();
 
-  void   setNumSamples( unsigned int sns )                           { m_sqrt_num_samples= sns; }
-  void   setDimensions( const unsigned int w, const unsigned int h ) { m_width = w; m_height = h; }
+  void   setNumSamples( unsigned int sns ) { 
+    m_sqrt_num_samples= sns; 
+  }
+  void   setDimensions( const unsigned int w, const unsigned int h ) { 
+    m_width = w; m_height = h; 
+  }
 
 private:
   // Should return true if key was handled, false otherwise.
@@ -161,11 +166,11 @@ void GIScene::initScene( InitialCameraData& camera_data )
 
   // Setup programs
   std::string ptx_path = ptxpath( "aaf_gi", "aaf_gi.cu" );
-  //Program ray_gen_program = m_context->createProgramFromPTXFile( ptx_path, "pathtrace_camera" );
-  //m_context->setRayGenerationProgram( 0, ray_gen_program );
-  Program exception_program = m_context->createProgramFromPTXFile( ptx_path, "exception" );
+  Program exception_program = m_context->createProgramFromPTXFile( ptx_path, 
+      "exception" );
   m_context->setExceptionProgram( 0, exception_program );
-  m_context->setMissProgram( 0, m_context->createProgramFromPTXFile( ptx_path, "miss" ) );
+  m_context->setMissProgram( 0, m_context->createProgramFromPTXFile( ptx_path, 
+        "miss" ) );
 
   m_context["frame_number"]->setUint(1);
 

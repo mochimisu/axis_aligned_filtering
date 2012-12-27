@@ -68,7 +68,7 @@ RT_PROGRAM void miss()
 }
 
 
-rtDeclareVariable(PerRayData_pathtrace_shadow, current_prd_shadow, rtPayload, );
+rtDeclareVariable(PerRayData_pathtrace_shadow, current_prd_shadow, rtPayload,);
 
 RT_PROGRAM void shadow()
 {
@@ -176,7 +176,8 @@ __device__ __inline__ void indirectFilter(
 
       if (euclidean_distsq < (dist_threshold*dist_threshold))
       {
-        float weight = gaussFilter(proj_distsq, 2.f*(1+50.*acos(dot(target_n,cur_n)))/cur_zpmin);
+        float weight = gaussFilter(proj_distsq, 
+            2.f*(1+50.*acos(dot(target_n,cur_n)))/cur_zpmin);
 
         blurred_indirect_sum += weight * target_indirect;
         sum_weight += weight;
@@ -191,9 +192,12 @@ __device__ __inline__ void indirectFilter(
 rtDeclareVariable(PerRayData_direct, prd_direct, rtPayload, );
 RT_PROGRAM void closest_hit_direct()
 {
-  float3 world_geo_normal   = normalize( rtTransformNormal( RT_OBJECT_TO_WORLD, geometric_normal ) );
-  float3 world_shade_normal = normalize( rtTransformNormal( RT_OBJECT_TO_WORLD, shading_normal ) );
-  float3 ffnormal     = faceforward( world_shade_normal, -ray.direction, world_geo_normal );
+  float3 world_geo_normal   = normalize( rtTransformNormal( RT_OBJECT_TO_WORLD,
+        geometric_normal ) );
+  float3 world_shade_normal = normalize( rtTransformNormal( RT_OBJECT_TO_WORLD,
+        shading_normal ) );
+  float3 ffnormal     = faceforward( world_shade_normal, -ray.direction,
+      world_geo_normal );
 
   prd_direct.hit = true;
   float3 hit_point = ray.origin + t_hit * ray.direction;
@@ -290,7 +294,8 @@ RT_PROGRAM void sample_direct_z()
 
   float3 n_u, n_v, n_w;
   createONB(dir_samp.norm, n_u, n_v, n_w);
-  unsigned int seed = tea<16>(screen.x*launch_index.y+launch_index.x, frame_number);
+  unsigned int seed = tea<16>(screen.x*launch_index.y+launch_index.x,
+      frame_number);
 
   for(int bucket = 0; bucket < num_buckets; ++bucket)
   {
@@ -401,7 +406,8 @@ RT_PROGRAM void sample_indirect()
 
   //sample this hemisphere according to our spp
   float3 incoming_indirect;
-  unsigned int seed = tea<16>(bucket.x*launch_index.y+launch_index.x, frame_number); //TODO :verify
+  unsigned int seed = tea<16>(bucket.x*launch_index.y+launch_index.x,
+      frame_number); //TODO :verify
   for (int samp = 0; samp < spp_int; ++samp)
   {
     PerRayData_direct prd;
