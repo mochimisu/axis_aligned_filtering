@@ -25,7 +25,7 @@
 #define INDIRECT_BOUNCES 1
 
 //enable GT mode
-#define GROUNDTRUTH
+//#define GROUNDTRUTH
 
 //64 = 4096 samples
 #define GT_SAMPLES_SQRT 64
