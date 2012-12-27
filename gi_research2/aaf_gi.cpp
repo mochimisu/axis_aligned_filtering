@@ -428,7 +428,7 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
         for(int i = 0; i < buffer_width; ++i)
           for(int j = 0; j < bucket_buffer_height; ++j)
           {
-            float cur_spb_val = spb_vals[i+j*buffer_width];
+            float cur_spb_val = max(spb_vals[i+j*buffer_width],0);
             min_spb = min(min_spb, cur_spb_val);
             max_spb = max(max_spb, cur_spb_val);
             average_spb += cur_spb_val;
@@ -449,7 +449,8 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
             float cur_clamped_spp = 0;
             for(int k = 0; k < num_buckets; ++k)
             {
-              float cur_spb_val = spb_vals[i+(j*num_buckets+k)*buffer_width];
+              float cur_spb_val = max(
+                  spb_vals[i+(j*num_buckets+k)*buffer_width],0);
               cur_spp += cur_spb_val;
               cur_clamped_spp += min(cur_spb_val, m_max_spb_pass);
             }
