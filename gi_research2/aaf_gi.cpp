@@ -16,14 +16,25 @@
 #define SCENE 1
 
 //number of buckets to split hemisphere into
-#define NUM_BUCKETS 4
+#define NUM_BUCKETS 1
+
+//number of maximum samples per pixel
+#define MAX_SPP 100
 
 //depth of indirect bounces
 #define INDIRECT_BOUNCES 1
 
+//enable GT mode
+#define GROUNDTRUTH
+
+//64 = 4096 samples
+#define GT_SAMPLES_SQRT 64
+
 //default width, height
-#define WIDTH 512u
-#define HEIGHT 512u
+//#define WIDTH 512u
+//#define HEIGHT 512u
+#define WIDTH 1024u
+#define HEIGHT 1024u
 
 //=== End config
 
@@ -134,6 +145,10 @@ private:
 
   bool m_filter_indirect;
   bool m_filter_z;
+
+#ifdef GROUNDTRUTH
+  int m_gt_total_pass;
+#endif
 };
 
 GIScene scene;
@@ -146,7 +161,7 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context->setEntryPointCount( 8 );
   m_context->setStackSize( 1800 );
 
-  m_context["scene_epsilon"]->setFloat( 1.e-3f );
+  m_context["scene_epsilon"]->setFloat( 0.01f );
   m_context["max_depth"]->setUint(m_max_depth);
   m_context["pathtrace_shadow_ray_type"]->setUint(1u);
   m_context["pathtrace_bsdf_shadow_ray_type"]->setUint(2u);
@@ -187,6 +202,8 @@ void GIScene::initScene( InitialCameraData& camera_data )
       ptx_path, "z_filter_second_pass");
   Program sample_indirect_prog = m_context->createProgramFromPTXFile(
       ptx_path, "sample_indirect");
+  Program sample_indirect_gt_prog = m_context->createProgramFromPTXFile(
+      ptx_path, "sample_indirect_gt");
   Program ind_filt_first_prog = m_context->createProgramFromPTXFile(
       ptx_path, "indirect_filter_first_pass");
   Program ind_filt_second_prog = m_context->createProgramFromPTXFile(
@@ -198,7 +215,11 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context->setRayGenerationProgram( 0, direct_z_sample_prog );
   m_context->setRayGenerationProgram( 1, z_filt_first_prog );
   m_context->setRayGenerationProgram( 2, z_filt_second_prog );
+#ifdef GROUNDTRUTH
+  m_context->setRayGenerationProgram( 3, sample_indirect_gt_prog );
+#else
   m_context->setRayGenerationProgram( 3, sample_indirect_prog );
+#endif
   m_context->setRayGenerationProgram( 4, ind_filt_first_prog );
   m_context->setRayGenerationProgram( 5, ind_filt_second_prog );
   m_context->setRayGenerationProgram( 6, display_prog );
@@ -274,6 +295,9 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context["target_spb"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
         RT_FORMAT_FLOAT, m_width, m_height*num_buckets));
+  m_context["target_spb_theoretical"]->set(
+      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+        RT_FORMAT_FLOAT, m_width, m_height*num_buckets));
 
 
   //View Mode for displaying different buffers
@@ -284,7 +308,7 @@ void GIScene::initScene( InitialCameraData& camera_data )
   //SPP Settings
   m_first_pass_spb_sqrt = 2;
   m_brute_spb = 1000;
-  m_max_spb_pass = 25;
+  m_max_spb_pass = MAX_SPP/num_buckets;
   m_context["first_pass_spb_sqrt"]->setUint(m_first_pass_spb_sqrt);
   m_context["brute_spb"]->setUint(m_brute_spb);
   m_context["max_spb_pass"]->setUint(m_max_spb_pass);
@@ -316,6 +340,16 @@ void GIScene::initScene( InitialCameraData& camera_data )
   
 
   m_context["use_textures"]->setUint(m_use_textures);
+
+#ifdef GROUNDTRUTH
+  m_context["total_gt_samples_sqrt"]->setUint(GT_SAMPLES_SQRT);
+  m_context["gt_samples_per_pass"]->setUint(MAX_SPP);
+  m_context["gt_pass"]->setUint(0);
+  int num_passes = (uint)ceil((float)GT_SAMPLES_SQRT*GT_SAMPLES_SQRT/MAX_SPP);
+  m_context["gt_total_pass"]->setUint(num_passes);
+  m_gt_total_pass = num_passes;
+  std::cout << "GT with " << num_passes << " passes" << std::endl;
+#endif
 
   // Finalize
   m_context->validate();
@@ -420,19 +454,28 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
         buffer->getSize( buffer_width, buffer_height );
         RTsize bucket_buffer_height = buffer_height * num_buckets;
         Buffer spb_buf = m_context["target_spb"]->getBuffer();
+        Buffer spb_theo_buf = m_context["target_spb_theoretical"]->getBuffer();
         float* spb_vals = reinterpret_cast<float*>(spb_buf->map());
-        float max_spb = spb_vals[0];
-        float min_spb = spb_vals[0];
+        float* spb_theo_vals = reinterpret_cast<float*>(spb_theo_buf->map());
+        float max_spb = spb_theo_vals[0];
+        float min_spb = spb_theo_vals[0];
+        float max_clamped_spb = spb_vals[0];
+        float min_clamped_spb = spb_vals[0];
         float average_spb = 0;
         float average_clamped_spb = 0;
         for(int i = 0; i < buffer_width; ++i)
           for(int j = 0; j < bucket_buffer_height; ++j)
           {
+            float cur_spb_theo_val = max(spb_theo_vals[i+j*buffer_width],0);
             float cur_spb_val = max(spb_vals[i+j*buffer_width],0);
-            min_spb = min(min_spb, cur_spb_val);
-            max_spb = max(max_spb, cur_spb_val);
+
+            min_spb = min(min_spb, cur_spb_theo_val);
+            max_spb = max(max_spb, cur_spb_theo_val);
             average_spb += cur_spb_val;
-            average_clamped_spb += min(cur_spb_val, m_max_spb_pass);
+
+            min_clamped_spb = min(min_clamped_spb, cur_spb_val);
+            max_clamped_spb = max(max_clamped_spb, cur_spb_val);
+            average_clamped_spb += cur_spb_val;
           }
         average_spb /= buffer_width*bucket_buffer_height;
         average_clamped_spb /= buffer_width*bucket_buffer_height;
@@ -440,6 +483,7 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
         float max_spp = 0;
         float min_spp = max_spb*num_buckets;
         float max_clamped_spp = 0;
+        float min_clamped_spp = max_clamped_spb*num_buckets;
         float average_spp = 0;
         float average_clamped_spp = 0;
         for(int i = 0; i < buffer_width; ++i)
@@ -449,14 +493,18 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
             float cur_clamped_spp = 0;
             for(int k = 0; k < num_buckets; ++k)
             {
+              float cur_spb_theo_val = max(
+                  spb_vals[i+(j*num_buckets+k)*buffer_width],0);
               float cur_spb_val = max(
                   spb_vals[i+(j*num_buckets+k)*buffer_width],0);
-              cur_spp += cur_spb_val;
-              cur_clamped_spp += min(cur_spb_val, m_max_spb_pass);
+
+              cur_spp += cur_spb_theo_val;
+              cur_clamped_spp += cur_spb_val;
             }
             min_spp = min(min_spp, cur_spp);
             max_spp = max(max_spp, cur_spp);
             max_clamped_spp = max(max_clamped_spp, cur_clamped_spp);
+            min_clamped_spp = min(min_clamped_spp, cur_clamped_spp);
             average_spp += cur_spp;
             average_clamped_spp += cur_clamped_spp;
           }
@@ -464,13 +512,12 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
         average_clamped_spp /= buffer_width * buffer_height;
 
         spb_buf->unmap();
+        spb_theo_buf->unmap();
 
         std::cout << "Buckets:" << std::endl;
         std::cout << "  Average SPB: " << average_clamped_spb << std::endl;
-        std::cout << "  Maximum SPB: " << min(m_max_spb_pass, max_spb) 
-          << std::endl;
-        std::cout << "  Minimum SPB: " << min(m_max_spb_pass, min_spb)
-          << std::endl;
+        std::cout << "  Maximum SPB: " << max_clamped_spb << std::endl;
+        std::cout << "  Minimum SPB: " << min_clamped_spb << std::endl;
         std::cout << "  Average SPB (Theoretical): " << 
           average_spb << std::endl;
         std::cout << "  Maximum SPB (Theoretical): " << max_spb << std::endl;
@@ -480,8 +527,7 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
         std::cout << "Pixels:" << std::endl;
         std::cout << "  Average SPP: " << average_clamped_spp << std::endl;
         std::cout << "  Maximum SPP: " << max_clamped_spp << std::endl;
-        std::cout << "  Minimum SPP: " << min(m_max_spb_pass*num_buckets,
-            min_spp) << std::endl;
+        std::cout << "  Minimum SPP: " << min_clamped_spp << std::endl;
         std::cout << "  Average SPP (Theoretical): " << average_spp 
           << std::endl; 
         std::cout << "  Maximum SPP (Theoretical): " << max_spp << std::endl;
@@ -502,6 +548,7 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
   return false;
 }
 
+#ifndef GROUNDTRUTH
 void GIScene::trace( const RayGenCameraData& camera_data )
 {
   m_context["eye"]->setFloat( camera_data.eye );
@@ -520,15 +567,6 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 
   m_context["frame_number"]->setUint( m_frame++ );
 
-  /*
-  for (int pass = 0; pass < 7; ++pass)
-  {
-    m_context->launch( pass,
-        static_cast<unsigned int>(buffer_width),
-        static_cast<unsigned int>(buffer_height)
-        );
-  }
-  */
   RTsize bucket_buffer_height = buffer_height * num_buckets;
   m_context->launch( 0, static_cast<unsigned int>(buffer_width), 
       static_cast<unsigned int>(buffer_height));
@@ -570,10 +608,22 @@ void GIScene::trace( const RayGenCameraData& camera_data )
       z_distbuf->unmap();
     }
     if (m_view_mode == 6)
-      m_max_heatmap_val = m_max_spb_pass;
-    if (m_view_mode ==7)
     {
       Buffer spb_buf = m_context["target_spb"]->getBuffer();
+      float* spb_vals = reinterpret_cast<float*>(spb_buf->map());
+      for(int i = 0; i < buffer_width; ++i)
+        for(int j = 0; j < bucket_buffer_height; ++j)
+        {
+          //reject values that are too large
+          float cur_spb_val = spb_vals[i+j*buffer_width];
+          if (cur_spb_val < 10000.)
+            m_max_heatmap_val = max(m_max_heatmap_val, cur_spb_val);
+        }
+      spb_buf->unmap();
+    }
+    if (m_view_mode ==7)
+    {
+      Buffer spb_buf = m_context["target_spb_theoretical"]->getBuffer();
       float* spb_vals = reinterpret_cast<float*>(spb_buf->map());
       for(int i = 0; i < buffer_width; ++i)
         for(int j = 0; j < bucket_buffer_height; ++j)
@@ -593,6 +643,42 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 #endif
 
 }
+#else
+void GIScene::trace( const RayGenCameraData& camera_data )
+{
+  m_context["eye"]->setFloat( camera_data.eye );
+  m_context["U"]->setFloat( camera_data.U );
+  m_context["V"]->setFloat( camera_data.V );
+  m_context["W"]->setFloat( camera_data.W );
+
+  Buffer buffer = m_context["output_buffer"]->getBuffer();
+  RTsize buffer_width, buffer_height;
+  buffer->getSize( buffer_width, buffer_height );
+
+  if( m_camera_changed ) {
+    m_camera_changed = false;
+    m_frame = 1;
+  }
+
+  m_context["frame_number"]->setUint( m_frame++ );
+
+  RTsize bucket_buffer_height = buffer_height * num_buckets;
+  if (m_frame == 2)
+  {
+    m_context->launch( 0, static_cast<unsigned int>(buffer_width), 
+        static_cast<unsigned int>(buffer_height));
+    for (int i = 0; i < m_gt_total_pass; ++i)
+    {
+      m_context["gt_pass"]->setUint(i);
+      m_context->launch( 3, static_cast<unsigned int>(buffer_width),
+          static_cast<unsigned int>(buffer_height));
+    }
+  }
+  m_context->launch( 6, static_cast<unsigned int>(buffer_width), 
+      static_cast<unsigned int>(buffer_height));
+}
+#endif
+
 
 //-----------------------------------------------------------------------------
 
@@ -1019,7 +1105,7 @@ int main( int argc, char** argv )
     scene.setNumSamples( sqrt_num_samples );
     scene.setDimensions( width, height );
     GLUTDisplay::setProgressiveDrawingTimeout(0);
-    GLUTDisplay::setUseSRGB(true);
+    //GLUTDisplay::setUseSRGB(true);
     GLUTDisplay::run( "Axis-Aligned Filtering: Global Illumination", 
         &scene, GLUTDisplay::CDProgressive );
   } catch( Exception& e ){

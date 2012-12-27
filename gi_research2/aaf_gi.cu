@@ -116,6 +116,7 @@ rtDeclareVariable(uint, view_mode, , );
 rtDeclareVariable(uint, view_bucket, , );
 rtDeclareVariable(float, max_heatmap, , );
 
+rtBuffer<float, 2>                 target_spb_theoretical;
 rtBuffer<float, 2>                 target_spb;
 
 rtDeclareVariable(float3, texcoord, attribute texcoord, ); 
@@ -289,7 +290,9 @@ RT_PROGRAM void sample_direct_z()
   Ks_image[launch_index] = dir_samp.Ks;
   depth[launch_index] = dir_samp.z_dist;
 
-  int initial_bucket_samples = 2;
+  int initial_bucket_samples_sqrt = 2;
+  int initial_bucket_samples = initial_bucket_samples_sqrt
+    * initial_bucket_samples_sqrt;
 
 
   float3 n_u, n_v, n_w;
@@ -307,10 +310,16 @@ RT_PROGRAM void sample_direct_z()
     {
       float3 sample_dir;
       float2 rand_samp = make_float2(rnd(seed),rnd(seed));
+      //stratify x,y
+      rand_samp.x = (samp%initial_bucket_samples_sqrt + rand_samp.x)
+        /initial_bucket_samples_sqrt;
+      rand_samp.y = (((int)samp/initial_bucket_samples_sqrt) + rand_samp.y)
+        /initial_bucket_samples_sqrt;
+
       //vary theta component of sampling to sample split hemisphere
       rand_samp.x = (bucket + rand_samp.x)/num_buckets;
       //dont accept "grazing" angles
-      rand_samp.y *= 0.95;
+      rand_samp.y *= 0.95f;
       sampleUnitHemisphere(rand_samp, n_u, n_v, n_w, sample_dir);
 
       PerRayData_direct indir_samp;
@@ -393,47 +402,55 @@ RT_PROGRAM void sample_indirect()
   //account for split buckets
   spp /= num_buckets;
 
-  target_spb[launch_index] = spp;
+  target_spb_theoretical[launch_index] = spp;
 
   spp = max(min(spp, (float)max_spb_pass),1.f);
 
-
-  int spp_int = (int) spp;
+  float spp_sqrt = sqrt(spp);
+  int spp_sqrt_int = (int) ceil(spp_sqrt);
+  int spp_int = spp_sqrt_int * spp_sqrt_int;
+  target_spb[launch_index] = spp_int;
 
   float3 first_hit = world_loc[screen_index];
   float3 normal = n[screen_index];
   float3 Kd = Kd_image[screen_index];
 
   //sample this hemisphere according to our spp
-  float3 incoming_indirect;
+  float3 incoming_indirect = make_float3(0);
   unsigned int seed = tea<16>(bucket.x*launch_index.y+launch_index.x,
       frame_number); //TODO :verify
   for (int samp = 0; samp < spp_int; ++samp)
-  {
-    PerRayData_direct prd;
-    float3 ray_origin = first_hit;
-    float3 ray_n = normal;
-    float3 rn_u, rn_v, rn_w;
-    float3 sample_dir;
-    float3 sample_color = make_float3(0);
-    for (int depth = 0; depth < indirect_ray_depth; ++depth)
     {
-      prd.hit = false;
-      createONB(ray_n, rn_u, rn_v, rn_w);
-      float2 rand_samp = make_float2(rnd(seed), rnd(seed));
-      rand_samp.x = (cur_bucket + rand_samp.x)/num_buckets;
-      sampleUnitHemisphere(rand_samp, rn_u, rn_v, rn_w, sample_dir);
-      Ray ray = make_Ray(ray_origin, sample_dir,
-          direct_ray_type, scene_epsilon, RT_DEFAULT_MAX);
-      rtTrace(top_object, ray, prd);
-      if (!prd.hit)
-        break;
-      sample_color += prd.incoming_direct_light * prd.Kd;
-      ray_origin = prd.world_loc;
-      ray_n = prd.norm;
+      PerRayData_direct prd;
+      float3 ray_origin = first_hit;
+      float3 ray_n = normal;
+      float3 rn_u, rn_v, rn_w;
+      float3 sample_dir;
+      float3 sample_color = make_float3(0);
+      for (int depth = 0; depth < indirect_ray_depth; ++depth)
+      {
+        prd.hit = false;
+        createONB(ray_n, rn_u, rn_v, rn_w);
+        float2 rand_samp = make_float2(rnd(seed), rnd(seed));
+        //stratify x,y
+        rand_samp.x = (samp%spp_sqrt_int + rand_samp.x)/spp_sqrt_int;
+        rand_samp.y = (((int)samp/spp_sqrt_int) + rand_samp.y)/spp_sqrt_int;
+
+        //sample inside appropriate bucket
+        rand_samp.x = (cur_bucket + rand_samp.x)/num_buckets;
+        sampleUnitHemisphere(rand_samp, rn_u, rn_v, rn_w, sample_dir);
+        
+        Ray ray = make_Ray(ray_origin, sample_dir,
+            direct_ray_type, scene_epsilon, RT_DEFAULT_MAX);
+        rtTrace(top_object, ray, prd);
+        if (!prd.hit)
+          break;
+        sample_color += prd.incoming_direct_light * prd.Kd;
+        ray_origin = prd.world_loc;
+        ray_n = prd.norm;
+      }
+      incoming_indirect += sample_color;
     }
-    incoming_indirect += sample_color;
-  }
   incoming_indirect /= (float)spp_int;
   
   indirect_illum[launch_index] = incoming_indirect;
@@ -635,22 +652,103 @@ RT_PROGRAM void display_heatmaps()
     {
       if (view_separated_bucket)
         output_buffer[launch_index] = make_float4(heatMap(
-              min(target_spb[target_bucket_index],(float)max_spb_pass)
-              /max_heatmap));
+              target_spb_theoretical[target_bucket_index]/max_heatmap));
       else
       {
         float combined_spp;
         for (int i = 0; i < num_buckets; ++i)
         {
-          combined_spp += target_spb[make_uint2(launch_index.x,
+          combined_spp += target_spb_theoretical[make_uint2(launch_index.x,
                 launch_index.y*num_buckets+i)];
         }
-        output_buffer[launch_index] = make_float4(heatMap(
-              min(combined_spp,(float)max_spb_pass)
+        output_buffer[launch_index] = make_float4(heatMap(combined_spp
               /(max_heatmap*num_buckets)));
       }
 
     }
   }
+
+}
+
+// Ground truth accumulative indirect sampling
+rtDeclareVariable(uint, total_gt_samples_sqrt, , );
+rtDeclareVariable(uint, gt_samples_per_pass, , );
+rtDeclareVariable(uint, gt_pass, , );
+rtDeclareVariable(uint, gt_total_pass, , );
+RT_PROGRAM void sample_indirect_gt()
+{
+  int total_gt_samples = total_gt_samples_sqrt*total_gt_samples_sqrt;
+  int samples_sofar = (float)total_gt_samples*gt_pass/gt_total_pass;
+  uint2 bucket_index = make_uint2(launch_index.x, launch_index.y*num_buckets);
+  uint2 screen_index = launch_index;
+
+  if(!visible[screen_index])
+  {
+    indirect_illum[bucket_index] = make_float3(0);
+    return;
+  }
+
+  if (gt_pass == 0)
+    for (int i = 0; i<num_buckets; ++i)
+    {
+      uint2 cur_bucket = make_uint2(bucket_index.x, bucket_index.y+i);
+      indirect_illum[cur_bucket] = make_float3(0);
+    }
+
+  int samp_this_pass = gt_samples_per_pass;
+  if (gt_pass == gt_total_pass - 1)
+  {
+    samp_this_pass = total_gt_samples-samples_sofar;
+  }
+
+  float3 first_hit = world_loc[screen_index];
+  float3 normal = n[screen_index];
+  float3 Kd = Kd_image[screen_index];
+
+  size_t2 out_buf = output_buffer.size();
+
+  //ignore buckets, and place all results in the first bucket multiplied
+  //by number of buckets used in non-gt code so we can use the same code
+  float3 incoming_indirect = make_float3(0);
+  unsigned int seed = tea<16>(out_buf.x*launch_index.y+launch_index.x,
+      frame_number); //TODO :verify
+  for(int samp = 0; samp < samp_this_pass; ++samp)
+  {
+    int global_samp = samples_sofar + samp;
+
+    PerRayData_direct prd;
+    float3 ray_origin = first_hit;
+    float3 ray_n = normal;
+    float3 rn_u, rn_v, rn_w;
+    float3 sample_dir;
+    float3 sample_color = make_float3(0);
+    for (int depth = 0; depth < indirect_ray_depth; ++depth)
+    {
+      prd.hit = false;
+      createONB(ray_n, rn_u, rn_v, rn_w);
+      float2 rand_samp = make_float2(rnd(seed), rnd(seed));
+      //stratify based on pass and total # of passes
+      rand_samp.x = (global_samp%total_gt_samples_sqrt + rand_samp.x)
+        /total_gt_samples_sqrt;
+      rand_samp.y = (((int)global_samp/total_gt_samples_sqrt) + rand_samp.y)
+        /total_gt_samples_sqrt;
+
+      sampleUnitHemisphere(rand_samp, rn_u, rn_v, rn_w, sample_dir);
+
+      Ray ray = make_Ray(ray_origin, sample_dir,
+          direct_ray_type, scene_epsilon, RT_DEFAULT_MAX);
+      rtTrace(top_object, ray, prd);
+      if (!prd.hit)
+        break;
+      sample_color += prd.incoming_direct_light * prd.Kd;
+      ray_origin = prd.world_loc;
+      ray_n = prd.norm;
+    }
+    incoming_indirect += sample_color;
+
+  }
+
+  indirect_illum[bucket_index] += incoming_indirect/total_gt_samples
+    *num_buckets;
 
 }
