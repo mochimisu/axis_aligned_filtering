@@ -1,24 +1,3 @@
-
-/*
- * Copyright (c) 2008 - 2009 NVIDIA Corporation.  All rights reserved.
- *
- * NVIDIA Corporation and its licensors retain all intellectual property and proprietary
- * rights in and to this software, related documentation and any modifications thereto.
- * Any use, reproduction, disclosure or distribution of this software and related
- * documentation without an express license agreement from NVIDIA Corporation is strictly
- * prohibited.
- *
- * TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THIS SOFTWARE IS PROVIDED *AS IS*
- * AND NVIDIA AND ITS SUPPLIERS DISCLAIM ALL WARRANTIES, EITHER EXPRESS OR IMPLIED,
- * INCLUDING, BUT NOT LIMITED TO, IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
- * PARTICULAR PURPOSE.  IN NO EVENT SHALL NVIDIA OR ITS SUPPLIERS BE LIABLE FOR ANY
- * SPECIAL, INCIDENTAL, INDIRECT, OR CONSEQUENTIAL DAMAGES WHATSOEVER (INCLUDING, WITHOUT
- * LIMITATION, DAMAGES FOR LOSS OF BUSINESS PROFITS, BUSINESS INTERRUPTION, LOSS OF
- * BUSINESS INFORMATION, OR ANY OTHER PECUNIARY LOSS) ARISING OUT OF THE USE OF OR
- * INABILITY TO USE THIS SOFTWARE, EVEN IF NVIDIA HAS BEEN ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGES
- */
-
 #include <optix.h>
 #include <optixu/optixu_math_namespace.h>
 #include "helpers.h"
@@ -26,20 +5,6 @@
 #include "random.h"
 
 using namespace optix;
-
-struct PerRayData_pathtrace
-{
-  float3 result;
-  float3 radiance;
-  float3 attenuation;
-  float3 origin;
-  float3 direction;
-  unsigned int seed;
-  int depth;
-  int countEmitted;
-  int done;
-  int inside;
-};
 
 struct PerRayData_pathtrace_shadow
 {
@@ -67,8 +32,6 @@ rtDeclareVariable(unsigned int,  rr_begin_depth, , );
 
 rtDeclareVariable(float3, geometric_normal, attribute geometric_normal, ); 
 rtDeclareVariable(float3, shading_normal,   attribute shading_normal, ); 
-
-rtDeclareVariable(PerRayData_pathtrace, current_prd, rtPayload, );
 
 rtDeclareVariable(optix::Ray, ray,          rtCurrentRay, );
 rtDeclareVariable(float,      t_hit,        rtIntersectionDistance, );
@@ -102,8 +65,6 @@ RT_PROGRAM void exception()
 
 RT_PROGRAM void miss()
 {
-  current_prd.radiance = bg_color;
-  current_prd.done = true;
 }
 
 
@@ -149,11 +110,16 @@ rtDeclareVariable(float,  vfov, , );
 rtDeclareVariable(uint, max_spb_pass, , );
 rtDeclareVariable(uint, indirect_ray_depth, , );
 rtDeclareVariable(int, pixel_radius, , );
+rtDeclareVariable(uint, use_textures, , );
 
-rtBuffer<float3, 2>                 debug_buf;
+rtDeclareVariable(uint, view_mode, , );
+rtDeclareVariable(uint, view_bucket, , );
+rtDeclareVariable(float, max_heatmap, , );
 
-//rtDeclareVariable(float3, texcoord, attribute texcoord, ); 
-//rtTextureSampler<float4, 2>   diffuse_map;  
+rtBuffer<float, 2>                 target_spb;
+
+rtDeclareVariable(float3, texcoord, attribute texcoord, ); 
+rtTextureSampler<float4, 2>   diffuse_map;  
 
 
 //Filter functions
@@ -234,9 +200,13 @@ RT_PROGRAM void closest_hit_direct()
   prd_direct.z_dist = t_hit;
   prd_direct.world_loc = hit_point;
   prd_direct.norm = ffnormal;
-  //float2 uv                     = make_float2(texcoord);
-  //float3 Kd = make_float3(tex2D(diffuse_map, uv.x, uv.y));
-  prd_direct.Kd = Kd;
+  float3 cur_Kd =  Kd;
+  if (use_textures)
+  {
+    float2 uv = make_float2(texcoord);
+    cur_Kd = make_float3(tex2D(diffuse_map, uv.x, uv.y));
+  }
+  prd_direct.Kd = cur_Kd;
   prd_direct.Ks = Ks;
 
 
@@ -290,8 +260,6 @@ RT_PROGRAM void sample_direct_z()
 
   PerRayData_direct dir_samp;
   dir_samp.hit = false;
-
-  debug_buf[launch_index] = make_float3(0);
 
   Ray ray = make_Ray(ray_origin, ray_direction, direct_ray_type, 
       scene_epsilon, RT_DEFAULT_MAX);
@@ -420,7 +388,11 @@ RT_PROGRAM void sample_indirect()
   //account for split buckets
   spp /= num_buckets;
 
+  target_spb[launch_index] = spp;
+
   spp = max(min(spp, (float)max_spb_pass),1.f);
+
+
   int spp_int = (int) spp;
 
   float3 first_hit = world_loc[screen_index];
@@ -526,29 +498,26 @@ RT_PROGRAM void indirect_filter_second_pass()
 
 // HeatMap visualization
 __device__ __inline__ float3 heatMap(float val) {
-float fraction;
-if (val < 0.0f)
-fraction = -1.0f;
-else if (val > 1.0f)
-fraction = 1.0f;
-else
-fraction = 2.0f * val - 1.0f;
+  float fraction;
+  if (val < 0.0f)
+    fraction = -1.0f;
+  else if (val > 1.0f)
+    fraction = 1.0f;
+  else
+    fraction = 2.0f * val - 1.0f;
 
-if (fraction < -0.5f)
-return make_float3(0.0f, 2*(fraction+1.0f), 1.0f);
-else if (fraction < 0.0f)
-return make_float3(0.0f, 1.0f, 1.0f - 2.0f * (fraction + 0.5f));
-else if (fraction < 0.5f)
-return make_float3(2.0f * fraction, 1.0f, 0.0f);
-else
-return make_float3(1.0f, 1.0f - 2.0f*(fraction - 0.5f), 0.0f);
+  if (fraction < -0.5f)
+    return make_float3(0.0f, 2*(fraction+1.0f), 1.0f);
+  else if (fraction < 0.0f)
+    return make_float3(0.0f, 1.0f, 1.0f - 2.0f * (fraction + 0.5f));
+  else if (fraction < 0.5f)
+    return make_float3(2.0f * fraction, 1.0f, 0.0f);
+  else
+    return make_float3(1.0f, 1.0f - 2.0f*(fraction - 0.5f), 0.0f);
 }
 
 RT_PROGRAM void display()
 {
-  //output_buffer[launch_index] = make_float4(direct_illum[launch_index],1.);
-  //output_buffer[launch_index] = make_float4(z_dist[make_uint2(launch_index.x, launch_index.y*num_buckets)].x/10000.);
-
   float3 indirect_illum_combined = make_float3(0);
   for (int i = 0; i < num_buckets; ++i)
   {
@@ -557,13 +526,125 @@ RT_PROGRAM void display()
   }
 
   indirect_illum_combined *= Kd_image[launch_index]/num_buckets;
-  //output_buffer[launch_index] = make_float4(indirect_illum_combined+direct_illum[launch_index],1);
-  output_buffer[launch_index] = make_float4(indirect_illum_combined,1);
-  //output_buffer[launch_index] += make_float4(debug_buf[launch_index],1);
+  output_buffer[launch_index] = make_float4(
+      direct_illum[launch_index] + indirect_illum_combined,1);
 
-  //output_buffer[launch_index] = make_float4(heatMap(z_dist[make_uint2(launch_index.x, launch_index.y*num_buckets)].x/500.),1);
-  //output_buffer[launch_index] = make_float4(direct_illum[launch_index],1.);
-  //output_buffer[launch_index] = make_float4(z_dist[make_uint2(launch_index.x, launch_index.y*num_buckets)].x/10000.);
-  //output_buffer[launch_index] = make_float4(direct_illum[launch_index],1);
-  //output_buffer[launch_index] = make_float4(n[launch_index],1);
+  //other view modes
+  if (view_mode)
+  {
+    bool view_separated_bucket = (view_bucket > 0)
+      && (view_bucket <= num_buckets);
+    uint2 target_bucket_index = make_uint2(launch_index.x, 
+        launch_index.y*num_buckets+view_bucket-1);
+    if (view_mode == 1)
+      output_buffer[launch_index] = make_float4(direct_illum[launch_index],1);
+    if (view_mode == 2)
+    {
+      if (view_separated_bucket)
+        output_buffer[launch_index] = make_float4(
+            indirect_illum[target_bucket_index] * Kd_image[launch_index],1);
+      else
+        output_buffer[launch_index] = make_float4(indirect_illum_combined,1);
+    }
+    if (view_mode == 3)
+    {
+      if (view_separated_bucket)
+        output_buffer[launch_index] = make_float4(
+            indirect_illum[target_bucket_index],1);
+      else
+        output_buffer[launch_index] = make_float4(
+            indirect_illum_combined/Kd_image[launch_index],1);
+    }
+  }
+
+}
+
+RT_PROGRAM void display_heatmaps()
+{
+  //other view modes
+  if (view_mode)
+  {
+    bool view_separated_bucket = (view_bucket > 0)
+      && (view_bucket <= num_buckets);
+    uint2 target_bucket_index = make_uint2(launch_index.x, 
+        launch_index.y*num_buckets+view_bucket-1);
+    if (view_mode == 4)
+    {
+      if (view_separated_bucket)
+        output_buffer[launch_index] = make_float4(heatMap(
+          z_dist[target_bucket_index].x/max_heatmap));
+      else
+      {
+        float z_min_combined = z_dist[make_uint2(launch_index.x,
+            launch_index.y*num_buckets)].x;
+        for (int i = 0; i < num_buckets; ++i)
+        {
+          z_min_combined = min(z_min_combined, 
+              z_dist[make_uint2(launch_index.x,
+                launch_index.y*num_buckets+i)].x);
+        }
+        output_buffer[launch_index] = make_float4(heatMap(z_min_combined/
+              max_heatmap));
+      }
+    }
+    if (view_mode == 5)
+    {
+      if (view_separated_bucket)
+        output_buffer[launch_index] = make_float4(heatMap(
+          z_dist[target_bucket_index].y/max_heatmap));
+      else
+      {
+        float z_max_combined = z_dist[make_uint2(launch_index.x,
+            launch_index.y*num_buckets)].x;
+        for (int i = 0; i < num_buckets; ++i)
+        {
+          z_max_combined = max(z_max_combined, 
+              z_dist[make_uint2(launch_index.x,
+                launch_index.y*num_buckets+i)].y);
+        }
+        output_buffer[launch_index] = make_float4(heatMap(z_max_combined
+              /max_heatmap));
+
+      }
+    }
+    if (view_mode == 6)
+    {
+      if (view_separated_bucket)
+        output_buffer[launch_index] = make_float4(heatMap(
+              target_spb[target_bucket_index]/max_heatmap));
+      else
+      {
+        float combined_spp;
+        for (int i = 0; i < num_buckets; ++i)
+        {
+          combined_spp += target_spb[make_uint2(launch_index.x,
+                launch_index.y*num_buckets+i)];
+        }
+        output_buffer[launch_index] = make_float4(heatMap(combined_spp
+              /(max_heatmap*num_buckets)));
+      }
+
+    }
+    if (view_mode == 7)
+    {
+      if (view_separated_bucket)
+        output_buffer[launch_index] = make_float4(heatMap(
+              min(target_spb[target_bucket_index],(float)max_spb_pass)
+              /max_heatmap));
+      else
+      {
+        float combined_spp;
+        for (int i = 0; i < num_buckets; ++i)
+        {
+          combined_spp += target_spb[make_uint2(launch_index.x,
+                launch_index.y*num_buckets+i)];
+        }
+        output_buffer[launch_index] = make_float4(heatMap(
+              min(combined_spp,(float)max_spb_pass)
+              /(max_heatmap*num_buckets)));
+      }
+
+    }
+  }
+
 }
