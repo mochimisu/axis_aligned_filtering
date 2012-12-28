@@ -1207,7 +1207,8 @@ void printUsageAndExit( const std::string& argv0, bool doExit = true )
   std::cout
     << "Axis-Aligned Filtering key bindings: " << std::endl
     << "b: Toggle indirect illumination filtering" << std::endl
-    << "n: Togle z filtering" << std::endl
+    << "n: Toggle z filtering" << std::endl
+    << "m: Toggle indirect illumination pre-filtering" << std::endl
     << "Z/z: Switch between debug views. " << std::endl
     << "Number Keys: Switch between buckets in supported debug views. " 
     << std::endl
