@@ -13,13 +13,15 @@
 // 0: Cornell box
 // 1: Conference
 // 2: Sponza
-#define SCENE 1
+// 3: Cornell box 2
+#define SCENE 3
 
 //number of buckets to split hemisphere into
 #define NUM_BUCKETS 1
 
 //number of maximum samples per pixel
 #define MAX_SPP 100
+//#define MAX_SPP 25
 
 //depth of indirect bounces
 #define INDIRECT_BOUNCES 1
@@ -31,10 +33,10 @@
 #define GT_SAMPLES_SQRT 64
 
 //default width, height
-//#define WIDTH 512u
-//#define HEIGHT 512u
-#define WIDTH 1024u
-#define HEIGHT 1024u
+#define WIDTH 512u
+#define HEIGHT 512u
+//#define WIDTH 1024u
+//#define HEIGHT 1024u
 
 //=== End config
 
@@ -107,6 +109,7 @@ private:
   // Should return true if key was handled, false otherwise.
   virtual bool keyPressed(unsigned char key, int x, int y);
   void createSceneCornell(InitialCameraData& camera_data);
+  void createSceneCornell2(InitialCameraData& camera_data);
   void createSceneSponza(InitialCameraData& camera_data);
   void createSceneConference(InitialCameraData& camera_data);
 
@@ -144,6 +147,7 @@ private:
   float m_max_heatmap_val;
 
   bool m_filter_indirect;
+  bool m_prefilter_indirect;
   bool m_filter_z;
 
 #ifdef GROUNDTRUTH
@@ -158,7 +162,7 @@ const unsigned int num_buckets = NUM_BUCKETS;
 void GIScene::initScene( InitialCameraData& camera_data )
 {
   m_context->setRayTypeCount( 5 );
-  m_context->setEntryPointCount( 8 );
+  m_context->setEntryPointCount( 10 );
   m_context->setStackSize( 1800 );
 
   m_context["scene_epsilon"]->setFloat( 0.01f );
@@ -212,6 +216,10 @@ void GIScene::initScene( InitialCameraData& camera_data )
       ptx_path, "display");
   Program display_heatmap_prog = m_context->createProgramFromPTXFile(
       ptx_path, "display_heatmaps");
+  Program ind_prefilt_first_prog = m_context->createProgramFromPTXFile(
+      ptx_path, "indirect_prefilter_first_pass");
+  Program ind_prefilt_second_prog = m_context->createProgramFromPTXFile(
+      ptx_path, "indirect_prefilter_second_pass");
   m_context->setRayGenerationProgram( 0, direct_z_sample_prog );
   m_context->setRayGenerationProgram( 1, z_filt_first_prog );
   m_context->setRayGenerationProgram( 2, z_filt_second_prog );
@@ -224,6 +232,8 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context->setRayGenerationProgram( 5, ind_filt_second_prog );
   m_context->setRayGenerationProgram( 6, display_prog );
   m_context->setRayGenerationProgram( 7, display_heatmap_prog );
+  m_context->setRayGenerationProgram( 8, ind_prefilt_first_prog );
+  m_context->setRayGenerationProgram( 9, ind_prefilt_second_prog );
 
   m_context["direct_ray_type"]->setUint(3u);
   m_context["indirect_ray_type"]->setUint(4u);
@@ -299,6 +309,14 @@ void GIScene::initScene( InitialCameraData& camera_data )
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
         RT_FORMAT_FLOAT, m_width, m_height*num_buckets));
 
+  //prefiltering buffers
+  m_context["prefilter_rejected"]->set(
+      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+        RT_FORMAT_INT2, m_width, m_height*num_buckets));
+  m_context["prefilter_rejected_filter1d"]->set(
+      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+        RT_FORMAT_INT2, m_width, m_height*num_buckets));
+
 
   //View Mode for displaying different buffers
   m_view_mode = 0;
@@ -319,6 +337,7 @@ void GIScene::initScene( InitialCameraData& camera_data )
 
   //toggle settings
   m_filter_indirect = true;
+  m_prefilter_indirect = true;
   m_filter_z = false;
 
   // Create scene geometry
@@ -336,6 +355,8 @@ void GIScene::initScene( InitialCameraData& camera_data )
   createSceneConference(camera_data);
 #elif SCENE == 2
   createSceneSponza(camera_data);
+#elif SCENE == 3
+  createSceneCornell2(camera_data);
 #endif
   
 
@@ -361,7 +382,7 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
   int idelta = 1;
   int num_view_modes = 4;
 #ifdef DEBUG_BUF
-  num_view_modes = 8;
+  num_view_modes = 9;
 #endif
   switch(key)
   {
@@ -373,6 +394,14 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
         std::cout << "Filter Indirect: On" << std::endl;
       else
         std::cout << "Filter Indirect: Off" << std::endl;
+      return true;
+    case 'M':
+    case 'm':
+      m_prefilter_indirect = 1-m_prefilter_indirect;
+      if (m_prefilter_indirect)
+        std::cout << "Prefilter Indirect: On" << std::endl;
+      else
+        std::cout << "Prefilter Indirect: Off" << std::endl;
       return true;
     case 'N':
     case 'n':
@@ -426,6 +455,10 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
           break;
         case 7:
           std::cout << "View mode: Target SPP/SPB (theoretical/unclamped)" 
+            << std::endl;
+          break;
+        case 8:
+          std::cout << "View mode: Rejected Sample Ratio" 
             << std::endl;
           break;
       }
@@ -535,8 +568,8 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
 
       }
       return true;
-    case 'M':
-    case 'm':
+    case 'X':
+    case 'x':
 #ifndef DEBUG_BUF
       std::cout << "Max heatmap value: Please turn on debug buffers" 
         << std::endl;
@@ -572,18 +605,25 @@ void GIScene::trace( const RayGenCameraData& camera_data )
       static_cast<unsigned int>(buffer_height));
   if (m_filter_z)
   {
-	  m_context->launch( 1, static_cast<unsigned int>(buffer_width), 
+    m_context->launch( 1, static_cast<unsigned int>(buffer_width), 
         static_cast<unsigned int>(bucket_buffer_height));
-	  m_context->launch( 2, static_cast<unsigned int>(buffer_width), 
+    m_context->launch( 2, static_cast<unsigned int>(buffer_width), 
+        static_cast<unsigned int>(bucket_buffer_height));
+  }
+  if (m_prefilter_indirect)
+  {
+    m_context->launch( 8, static_cast<unsigned int>(buffer_width), 
+        static_cast<unsigned int>(bucket_buffer_height));
+    m_context->launch( 9, static_cast<unsigned int>(buffer_width),
         static_cast<unsigned int>(bucket_buffer_height));
   }
   m_context->launch( 3, static_cast<unsigned int>(buffer_width),
       static_cast<unsigned int>(bucket_buffer_height));
   if (m_filter_indirect)
   {
-	  m_context->launch( 4, static_cast<unsigned int>(buffer_width), 
+    m_context->launch( 4, static_cast<unsigned int>(buffer_width), 
         static_cast<unsigned int>(bucket_buffer_height));
-	  m_context->launch( 5, static_cast<unsigned int>(buffer_width), 
+    m_context->launch( 5, static_cast<unsigned int>(buffer_width), 
         static_cast<unsigned int>(bucket_buffer_height));
   }
   m_context->launch( 6, static_cast<unsigned int>(buffer_width), 
@@ -621,7 +661,7 @@ void GIScene::trace( const RayGenCameraData& camera_data )
         }
       spb_buf->unmap();
     }
-    if (m_view_mode ==7)
+    if (m_view_mode == 7)
     {
       Buffer spb_buf = m_context["target_spb_theoretical"]->getBuffer();
       float* spb_vals = reinterpret_cast<float*>(spb_buf->map());
@@ -634,6 +674,10 @@ void GIScene::trace( const RayGenCameraData& camera_data )
             m_max_heatmap_val = max(m_max_heatmap_val, cur_spb_val);
         }
       spb_buf->unmap();
+    }
+    if (m_view_mode == 8)
+    {
+      m_max_heatmap_val = 0.25f;
     }
     m_context["max_heatmap"]->setFloat(m_max_heatmap_val);
     
@@ -897,7 +941,137 @@ void GIScene::createSceneCornell(InitialCameraData& camera_data)
       gis.end());
   geometry_group->setAcceleration( m_context->createAcceleration("Bvh","Bvh"));
   m_context["top_object"]->set( geometry_group );
+  m_context["vfov"]->setFloat( vfov );
 }
+
+
+void GIScene::createSceneCornell2(InitialCameraData& camera_data)
+{
+
+  m_use_textures = false;
+  // Set up camera
+  const float vfov = 35.f;
+
+  camera_data = InitialCameraData( 
+      make_float3( 278.0f, 550.0f, -700.0f ), // eye
+      make_float3( 278.0f, 273.0f, 0.0f ),    // lookat
+      make_float3( 0.0f, 1.0f,  0.0f ),       // up
+      35.0f );         // vfov
+
+
+
+  // Light buffer
+  ParallelogramLight light;
+  light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
+  light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
+  light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
+  light.normal   = normalize( cross(light.v1, light.v2) );
+  light.emission = make_float3( 15.0f, 15.0f, 5.0f );
+
+  Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
+  light_buffer->setFormat( RT_FORMAT_USER );
+  light_buffer->setElementSize( sizeof( ParallelogramLight ) );
+  light_buffer->setSize( 1u );
+  memcpy( light_buffer->map(), &light, sizeof( light ) );
+  light_buffer->unmap();
+  m_context["lights"]->setBuffer( light_buffer );
+  // Set up material
+  Material diffuse = m_context->createMaterial();
+  Material diffuse2 = m_context->createMaterial();
+  Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+        "aaf_gi.cu" ), "shadow" );
+  Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+        "aaf_gi.cu" ), "closest_hit_direct" );
+  diffuse->setClosestHitProgram( 3, diffuse_p );
+  diffuse->setAnyHitProgram( 1, diffuse_ah );
+  diffuse2->setClosestHitProgram( 3, diffuse_p );
+  diffuse2->setAnyHitProgram( 1, diffuse_ah );
+  
+  //dummy texture maps
+  diffuse["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.2f, 0.2f, 0.2f ) ) );
+  diffuse["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.8f, 0.8f, 0.8f ) ) );
+  diffuse["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.0f, 0.0f, 0.0f ) ) );
+  diffuse["Kd"]->setFloat(0.5,0.5,1.5);
+  diffuse2["Kd"]->setFloat(1.0,1.0,1.0);
+
+  // Set up parallelogram programs
+  std::string ptx_path = ptxpath( "aaf_gi", "parallelogram.cu" );
+  m_pgram_bounding_box = m_context->createProgramFromPTXFile( ptx_path, 
+      "bounds" );
+  m_pgram_intersection = m_context->createProgramFromPTXFile( ptx_path, 
+      "intersect" );
+
+  // create geometry instances
+  std::vector<GeometryInstance> gis;
+
+  const float3 white = make_float3( 1.f, 1.f, 1.f );
+  const float3 green = make_float3( 0.2f, 1.f, 0.2f );
+  const float3 red   = make_float3( 1.f, 0.2f, 0.2f );
+  const float3 light_em = make_float3( 15.0f, 15.0f, 15.0f );
+
+  // Floor
+  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ),
+                                      make_float3( 556.0f, 0.0f, 0.0f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Ceiling
+  gis.push_back( createParallelogram( make_float3( 0.0f, 548.8f, 0.0f ),
+                                      make_float3( 556.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Back wall
+  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 559.2f),
+                                      make_float3( 0.0f, 548.8f, 0.0f),
+                                      make_float3( 556.0f, 0.0f, 0.0f) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Right wall
+  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 548.8f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", green);
+
+  // Left wall
+  gis.push_back( createParallelogram( make_float3( 556.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ),
+                                      make_float3( 0.0f, 548.8f, 0.0f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", red);
+
+  GeometryGroup geom_group = m_context->createGeometryGroup(gis.begin(), 
+      gis.end());
+
+  Matrix4x4 dragon_xform = Matrix4x4::translate(make_float3(370,0,270)) 
+    * Matrix4x4::rotate(M_PI + M_PI/3,make_float3(0,1,0))
+	* Matrix4x4::scale(make_float3(28,28,28));
+    
+  std::string objpath = std::string( sutilSamplesDir() ) +
+    "/gi_research2/data/dragon.obj";
+  ObjLoader * dragon_loader = new ObjLoader( objpath.c_str(), m_context, 
+      geom_group, diffuse, true );
+  dragon_loader->load(dragon_xform);
+
+  Matrix4x4 elephant_xform = Matrix4x4::translate(make_float3(150,0,270))	
+    * Matrix4x4::rotate(M_PI-M_PI/8,make_float3(0,-1,0))
+    * Matrix4x4::scale(make_float3(0.35,0.35,0.35));
+    
+  objpath = std::string( sutilSamplesDir() ) + 
+    "/gi_research2/data/elephant.obj";
+  ObjLoader * elephant_loader = new ObjLoader( objpath.c_str(), m_context, 
+      geom_group, diffuse2, true );
+  elephant_loader->load(elephant_xform);
+
+   // Declare these so validation will pass
+  m_context["vfov"]->setFloat( vfov );
+  m_context["top_object"]->set( geom_group );
+  m_context["top_shadower"]->set( geom_group );
+}
+
+
 
 void GIScene::createSceneSponza(InitialCameraData& camera_data)
 {
@@ -1039,7 +1213,7 @@ void printUsageAndExit( const std::string& argv0, bool doExit = true )
     << std::endl
     << "0: View combined bucket in supported debug views" << std::endl
     << "s: Save current buffer to file. " << std::endl
-    << "m: Print maximum heatmap value if viewing a heatmap" << std::endl;
+    << "x: Print maximum heatmap value if viewing a heatmap" << std::endl;
   //GLUTDisplay::printUsage();
 
   if ( doExit ) exit(1);

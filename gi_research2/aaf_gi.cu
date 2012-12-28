@@ -94,7 +94,6 @@ rtBuffer<float3, 2>               indirect_illum;
 rtBuffer<float3, 2>               indirect_illum_filter1d;
 rtBuffer<float3, 2>               Kd_image;
 rtBuffer<float3, 2>               Ks_image;
-rtBuffer<float, 2>                target_indirect_spp;
 rtBuffer<float2, 2>               z_dist;
 rtBuffer<float2, 2>               z_dist_filter1d;
 rtBuffer<float3, 2>               world_loc;
@@ -122,6 +121,13 @@ rtBuffer<float, 2>                 target_spb;
 rtDeclareVariable(float3, texcoord, attribute texcoord, ); 
 rtTextureSampler<float4, 2>   diffuse_map;  
 
+//prefilter pass
+//x: number of rejected pixels
+//y: number of possible filtered pixels
+rtBuffer<uint2, 2>                prefilter_rejected_filter1d;
+rtBuffer<uint2, 2>                prefilter_rejected;
+
+
 
 //Filter functions
 // Our Gaussian Filter, based on w_xf
@@ -135,56 +141,98 @@ __device__ __inline__ float gaussFilter(float distsq, float wxf)
 
   return exp(-sample);
 }
+
+
+__device__ __inline__ bool indirectFilterThresholds(
+    const float3& cur_world_loc,
+    const float3& cur_n,
+    const float cur_zpmin,
+    const uint2& target_index,
+    const size_t2& buf_size,
+    unsigned int bucket)
+{
+  const float z_threshold = .1f;
+  const float dist_threshold = 100.f;
+  const float angle_threshold = 10.f * M_PI/180.f;
+  const float dist_threshold_sq = dist_threshold * dist_threshold;
+
+
+
+  uint2 target_bucket_index = make_uint2(target_index.x,
+      target_index.y*num_buckets+bucket);
+  float target_zpmin = z_dist[target_bucket_index].x;
+  float3 target_n = n[target_index];
+  bool use_filt = visible[target_index];
+
+  if (use_filt
+      && abs(acos(dot(target_n, cur_n))) < angle_threshold
+      //&& abs((1./target_zpmin - 1./cur_zpmin)/(1./target_zpmin 
+      //   + 1./cur_zpmin)) < z_thres
+      //&& abs((target_zpmin - cur_zpmin)/(target_zpmin + cur_zpmin)) < z_thres
+      //&& (1/target_zpmin - 1/cur_zpmin) < dist_scale_threshold
+     )
+  {
+    float3 target_loc = world_loc[target_index];
+    float3 diff = cur_world_loc - target_loc;
+    float euclidean_distsq = dot(diff,diff);
+
+    if (euclidean_distsq < dist_threshold_sq)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+__device__ __inline__ float filterWeight(
+    float proj_distsq, const float3& target_n, const float3& cur_n,
+    float cur_zpmin)
+{
+  return gaussFilter(proj_distsq,
+      2.f*(1.f+50.f*acos(dot(target_n,cur_n)))/cur_zpmin);
+}
+
+
 __device__ __inline__ void indirectFilter( 
     float3& blurred_indirect_sum,
     float& sum_weight,
     const float3& cur_world_loc,
     float3 cur_n,
     float cur_zpmin,
-    int i,
-    int j,
+    const uint2& target_index,
     const size_t2& buf_size,
     unsigned int pass,
     unsigned int bucket)
 {
-  //const float dist_scale_threshold = 10.0f;
-  const float z_thres = .1f;
-  const float dist_threshold = 100.0f;
-  const float angle_threshold = 10.f * M_PI/180.0f;
 
-  if (i > 0 && i < buf_size.x && j > 0 && j < buf_size.y) {
-    uint2 target_index = make_uint2(i,j);
-    uint2 target_bucket_index = make_uint2(i,num_buckets*j+bucket);
+  bool can_filter = false;
+  if (target_index.x > 0 && target_index.x < buf_size.x 
+      && target_index.y > 0 && target_index.y < buf_size.y)
+  {
+    can_filter = indirectFilterThresholds(
+      cur_world_loc, cur_n, cur_zpmin, target_index, buf_size, bucket);
+  }
+  if (can_filter)
+  {
+    //TODO: cleanup
+    uint2 target_bucket_index = make_uint2(target_index.x,
+        target_index.y*num_buckets+bucket);
+
+    float3 target_loc = world_loc[target_index];
+    float3 diff = cur_world_loc - target_loc;
+    float euclidean_distsq = dot(diff,diff);
+    float rDn = dot(diff, cur_n);
+    float proj_distsq = euclidean_distsq - rDn*rDn;
+    float3 target_n = n[target_index];
+
+    float weight = filterWeight(proj_distsq, target_n, cur_n, cur_zpmin);
+
     float3 target_indirect = indirect_illum[target_bucket_index];
     if (pass == 1)
       target_indirect = indirect_illum_filter1d[target_bucket_index];
-    float target_zpmin = z_dist[target_bucket_index].x;
-    float3 target_n = n[target_index];
-    bool use_filt = visible[target_index];
 
-    if (use_filt 
-        && abs(acos(dot(target_n, cur_n))) < angle_threshold
-        //&& abs((1./target_zpmin - 1./cur_zpmin)/(1./target_zpmin + 1./cur_zpmin)) < z_thres
-        //&& abs((target_zpmin - cur_zpmin)/(target_zpmin + cur_zpmin)) < z_thres
-        //&& (1/target_zpmin - 1/cur_zpmin) < dist_scale_threshold
-       )
-    {
-      float3 target_loc = world_loc[target_index];
-      float3 diff = cur_world_loc - target_loc;
-      float euclidean_distsq = dot(diff,diff);
-      float rDn = dot(diff, cur_n);
-      float proj_distsq = euclidean_distsq - rDn*rDn;
-
-      if (euclidean_distsq < (dist_threshold*dist_threshold))
-      {
-        float weight = gaussFilter(proj_distsq, 
-            2.f*(1+50.*acos(dot(target_n,cur_n)))/cur_zpmin);
-
-        blurred_indirect_sum += weight * target_indirect;
-        sum_weight += weight;
-      }
-    }
-
+    blurred_indirect_sum += weight * target_indirect;
+    sum_weight += weight;
   }
 }
 
@@ -263,6 +311,9 @@ RT_PROGRAM void sample_direct_z()
   uint2 base_bucket_index = make_uint2(launch_index.x,
       launch_index.y*num_buckets);
 
+  //initialize some buffers
+  prefilter_rejected[launch_index] = make_uint2(0,1);
+
   PerRayData_direct dir_samp;
   dir_samp.hit = false;
 
@@ -277,7 +328,6 @@ RT_PROGRAM void sample_direct_z()
       uint2 bucket_index = make_uint2(base_bucket_index.x,
           base_bucket_index.y+bucket);
       z_dist[bucket_index] = make_float2(1000000000000.f,0.f);
-      target_indirect_spp[bucket_index] = 0;
     }
     return;
   }
@@ -374,6 +424,7 @@ RT_PROGRAM void z_filter_second_pass()
     }
     z_dist[launch_index] = make_float2(cur_zmin, cur_zmax);
 }
+
 RT_PROGRAM void sample_indirect()
 {
   size_t2 bucket = indirect_illum.size();
@@ -404,7 +455,12 @@ RT_PROGRAM void sample_indirect()
 
   target_spb_theoretical[launch_index] = spp;
 
-  spp = max(min(spp, (float)max_spb_pass),1.f);
+  uint2 pf_rej = prefilter_rejected[launch_index];
+
+  spp = max(
+      min(spp / (1.f-(float)pf_rej.x/pf_rej.y), 
+        (float)max_spb_pass),
+      1.f);
 
   float spp_sqrt = sqrt(spp);
   int spp_sqrt_int = (int) ceil(spp_sqrt);
@@ -470,16 +526,14 @@ RT_PROGRAM void indirect_filter_first_pass()
   float3 cur_world_loc = world_loc[screen_index];
   float3 cur_n = n[screen_index];
 
-  for (int i = -pixel_radius; i < pixel_radius; ++i)
-  {
-    if (visible[screen_index])
+  if (visible[screen_index])
+    for (int i = -pixel_radius; i < pixel_radius; ++i)
     {
+      uint2 target_index = make_uint2(screen_index.x+i, screen_index.y);
       indirectFilter(blurred_indirect_sum, sum_weight,
           cur_world_loc, cur_n, cur_zmin,
-          screen_index.x+i, screen_index.y,
-          buf_size, 0, cur_bucket);
+          target_index, buf_size, 0, cur_bucket);
     }
-  }
 
   if (sum_weight > 0.0001f)
     indirect_illum_filter1d[launch_index] = blurred_indirect_sum/sum_weight;
@@ -500,24 +554,112 @@ RT_PROGRAM void indirect_filter_second_pass()
   float3 cur_world_loc = world_loc[screen_index];
   float3 cur_n = n[screen_index];
 
-  for (int i = -pixel_radius; i < pixel_radius; ++i)
-  {
-    if (visible[screen_index])
+  if (visible[screen_index])
+    for (int i = -pixel_radius; i < pixel_radius; ++i)
     {
+      uint2 target_index = make_uint2(screen_index.x, screen_index.y+i);
       indirectFilter(blurred_indirect_sum, sum_weight,
           cur_world_loc, cur_n, cur_zmin,
-          screen_index.x, screen_index.y+i,
-          buf_size, 1, cur_bucket);
+          target_index, buf_size, 1, cur_bucket);
     }
-  }
 
   if (sum_weight > 0.0001f)
     indirect_illum[launch_index] = blurred_indirect_sum/sum_weight;
   else
     indirect_illum[launch_index] = indirect_illum_filter1d[launch_index];
 
-
 }
+RT_PROGRAM void indirect_prefilter_first_pass()
+{
+  uint2 screen_index = make_uint2(launch_index.x,
+      launch_index.y/num_buckets);
+  uint cur_bucket = launch_index.y%num_buckets;
+
+  float cur_zmin = z_dist[launch_index].x;
+  size_t2 buf_size = indirect_illum.size();
+
+  float3 cur_world_loc = world_loc[screen_index];
+  float3 cur_n = n[screen_index];
+
+  uint2 cur_prefilter_rej = make_uint2(0,0);
+
+  if (visible[screen_index])
+    for (int i = -pixel_radius; i < pixel_radius; ++i)
+    {
+      //TODO: cleanup
+      uint2 target_index = make_uint2(screen_index.x, screen_index.y+i);
+      if (target_index.x > 0 && target_index.x < buf_size.x 
+          && target_index.y > 0 && target_index.y < buf_size.y)
+      {
+        bool can_filter = indirectFilterThresholds(
+            cur_world_loc, cur_n, cur_zmin, target_index, 
+            buf_size, cur_bucket);
+        float3 target_loc = world_loc[target_index];
+        float3 diff = cur_world_loc - target_loc;
+        float euclidean_distsq = dot(diff,diff);
+        float rDn = dot(diff, cur_n);
+        float proj_distsq = euclidean_distsq - rDn*rDn;
+        float3 target_n = n[target_index];
+
+        float weight = filterWeight(proj_distsq, target_n, cur_n, cur_zmin);
+        if (weight > 0.01)
+        {
+          cur_prefilter_rej.x += (!can_filter);
+          cur_prefilter_rej.y += 1;
+        }
+      }
+    }
+  prefilter_rejected_filter1d[launch_index] = cur_prefilter_rej;
+}
+
+RT_PROGRAM void indirect_prefilter_second_pass()
+{
+  uint2 screen_index = make_uint2(launch_index.x,
+      launch_index.y/num_buckets);
+  uint cur_bucket = launch_index.y%num_buckets;
+
+  float cur_zmin = z_dist[launch_index].x;
+  size_t2 buf_size = indirect_illum.size();
+
+  float3 cur_world_loc = world_loc[screen_index];
+  float3 cur_n = n[screen_index];
+
+  uint2 cur_prefilter_rej = make_uint2(0,0);
+
+  if (visible[screen_index])
+    for (int i = -pixel_radius; i < pixel_radius; ++i)
+    {
+      //TODO: cleanup
+      uint2 target_index = make_uint2(screen_index.x+i, screen_index.y);
+      if (target_index.x > 0 && target_index.x < buf_size.x 
+          && target_index.y > 0 && target_index.y < buf_size.y)
+      {
+        bool can_filter = indirectFilterThresholds(
+            cur_world_loc, cur_n, cur_zmin, target_index, 
+            buf_size, cur_bucket);
+        float3 target_loc = world_loc[target_index];
+        float3 diff = cur_world_loc - target_loc;
+        float euclidean_distsq = dot(diff,diff);
+        float rDn = dot(diff, cur_n);
+        float proj_distsq = euclidean_distsq - rDn*rDn;
+        float3 target_n = n[target_index];
+
+        float weight = filterWeight(proj_distsq, target_n, cur_n, cur_zmin);
+        if (weight > 0.01)
+        {
+          uint2 target_bucket_index = make_uint2(launch_index.x+i,
+              launch_index.y);
+          uint2 firstpass_pf_rej = 
+            prefilter_rejected_filter1d[target_bucket_index];
+          if (!can_filter)
+            cur_prefilter_rej.x += firstpass_pf_rej.x;
+          cur_prefilter_rej.y += firstpass_pf_rej.y;
+        }
+      }
+    }
+  prefilter_rejected[launch_index] = cur_prefilter_rej;
+}
+
 
 // HeatMap visualization
 __device__ __inline__ float3 heatMap(float val) {
@@ -664,7 +806,28 @@ RT_PROGRAM void display_heatmaps()
         output_buffer[launch_index] = make_float4(heatMap(combined_spp
               /(max_heatmap*num_buckets)));
       }
-
+    }
+    if (view_mode == 8)
+    {
+      if (view_separated_bucket)
+        output_buffer[launch_index] = make_float4(heatMap(
+              (float)
+              prefilter_rejected[target_bucket_index].x/
+              prefilter_rejected[target_bucket_index].y/max_heatmap));
+      else
+      {
+        uint2 combined_rejected = make_uint2(0,0);
+        for (int i = 0; i < num_buckets; ++i)
+        {
+          uint2 cur_bucket_index = make_uint2(launch_index.x,
+              launch_index.y*num_buckets+i);
+          combined_rejected.x += prefilter_rejected[cur_bucket_index].x;
+          combined_rejected.y += prefilter_rejected[cur_bucket_index].y;
+        }
+        output_buffer[launch_index] = make_float4(heatMap(
+              (float)
+              combined_rejected.x/combined_rejected.y/max_heatmap));
+      }
     }
   }
 
