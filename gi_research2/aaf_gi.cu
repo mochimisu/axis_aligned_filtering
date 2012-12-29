@@ -82,7 +82,8 @@ RT_PROGRAM void shadow()
 struct PerRayData_direct
 {
   float3 world_loc;
-  float3 incoming_direct_light;
+  float3 incoming_diffuse_light;
+  float3 incoming_specular_light;
   float3 norm;
   float3 Kd;
   float3 Ks;
@@ -102,6 +103,7 @@ rtBuffer<float, 2>                depth;
 rtBuffer<char, 2>                 visible;
 rtDeclareVariable(float3,   Kd, , );
 rtDeclareVariable(float3,   Ks, , );
+rtDeclareVariable(float,   phong_exp, , );
 rtDeclareVariable(uint,  direct_ray_type, , );
 rtDeclareVariable(uint,  num_buckets, , );
 rtDeclareVariable(int,  z_filter_radius, , );
@@ -253,19 +255,22 @@ RT_PROGRAM void closest_hit_direct()
   prd_direct.z_dist = t_hit;
   prd_direct.world_loc = hit_point;
   prd_direct.norm = ffnormal;
-  float3 cur_Kd =  Kd;
+  float3 cur_Kd = Kd;
+  float3 cur_Ks = Ks;
+  float cur_phong_exp = phong_exp;
   if (use_textures)
   {
     float2 uv = make_float2(texcoord);
     cur_Kd = make_float3(tex2D(diffuse_map, uv.x, uv.y));
   }
-  prd_direct.Kd = cur_Kd;
-  prd_direct.Ks = Ks;
 
+  prd_direct.Kd = cur_Kd;
+  prd_direct.Ks = cur_Ks;
 
   //lights
   unsigned int num_lights = lights.size();
-  float3 direct = make_float3(0.0f);
+  float3 diffuse = make_float3(0.0f);
+  float3 specular = make_float3(0.0f);
   for(int i = 0; i < num_lights; ++i)
   {
     ParallelogramLight light = lights[i];
@@ -275,24 +280,31 @@ RT_PROGRAM void closest_hit_direct()
     float nDl = max(dot(ffnormal, L),0.f);
     float A = length(cross(light.v1, light.v2));
     float LnDl = dot( light.normal, L );
-    float weight=nDl;// / (M_PIf*Ldist*Ldist);
+
+
+    float3 R = normalize(2*ffnormal*dot(ffnormal,L)-L);
+    float nDr = max(dot(-ray.direction, R), 0.f);
 
     // cast shadow ray
-    if ( nDl > 0.0f ) {
+    if ( nDl > 0.0f )
+    {
       PerRayData_pathtrace_shadow shadow_prd;
       shadow_prd.inShadow = false;
       Ray shadow_ray = make_Ray( hit_point, L, pathtrace_shadow_ray_type, 
           scene_epsilon, Ldist );
       rtTrace(top_object, shadow_ray, shadow_prd);
 
-      if(!shadow_prd.inShadow){
-        direct += make_float3(weight);
+      if(!shadow_prd.inShadow)
+      {
+        diffuse += make_float3(nDl);
+        specular += make_float3(pow(nDr,phong_exp));
       }
     }
 
   }
 
-  prd_direct.incoming_direct_light = direct;
+  prd_direct.incoming_diffuse_light = diffuse;
+  prd_direct.incoming_specular_light = specular;
 }
 
 RT_PROGRAM void closest_hit_indirect()
@@ -334,7 +346,8 @@ RT_PROGRAM void sample_direct_z()
   visible[launch_index] = true;
   
   world_loc[launch_index] = dir_samp.world_loc;
-  direct_illum[launch_index] = dir_samp.incoming_direct_light * dir_samp.Kd;
+  direct_illum[launch_index] = dir_samp.incoming_diffuse_light * dir_samp.Kd
+    + dir_samp.incoming_specular_light ;
   n[launch_index] = dir_samp.norm;
   Kd_image[launch_index] = dir_samp.Kd;
   Ks_image[launch_index] = dir_samp.Ks;
@@ -501,7 +514,7 @@ RT_PROGRAM void sample_indirect()
         rtTrace(top_object, ray, prd);
         if (!prd.hit)
           break;
-        sample_color += prd.incoming_direct_light * prd.Kd;
+        sample_color += prd.incoming_diffuse_light * prd.Kd;
         ray_origin = prd.world_loc;
         ray_n = prd.norm;
       }
@@ -903,7 +916,7 @@ RT_PROGRAM void sample_indirect_gt()
       rtTrace(top_object, ray, prd);
       if (!prd.hit)
         break;
-      sample_color += prd.incoming_direct_light * prd.Kd;
+      sample_color += prd.incoming_diffuse_light * prd.Kd;
       ray_origin = prd.world_loc;
       ray_n = prd.norm;
     }

@@ -20,8 +20,8 @@
 #define NUM_BUCKETS 1
 
 //number of maximum samples per pixel
-#define MAX_SPP 100
-//#define MAX_SPP 25
+//#define MAX_SPP 100
+#define MAX_SPP 25
 
 //depth of indirect bounces
 #define INDIRECT_BOUNCES 1
@@ -840,6 +840,9 @@ void GIScene::createSceneCornell(InitialCameraData& camera_data)
         make_float3( 0.8f, 0.8f, 0.8f ) ) );
   diffuse["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
         make_float3( 0.0f, 0.0f, 0.0f ) ) );
+  diffuse["Kd"]->setFloat(0.5,0.5,1.5);
+  diffuse["Ks"]->setFloat(0.,0.,0.);
+  diffuse["phong_exp"]->setFloat(1.f);
 
   // Set up parallelogram programs
   std::string ptx_path = ptxpath( "aaf_gi", "parallelogram.cu" );
@@ -854,6 +857,7 @@ void GIScene::createSceneCornell(InitialCameraData& camera_data)
   const float3 white = make_float3( 0.8f, 0.8f, 0.8f );
   const float3 green = make_float3( 0.05f, 0.8f, 0.05f );
   const float3 red   = make_float3( 0.8f, 0.05f, 0.05f );
+  const float3 black = make_float3( 0.f, 0.f, 0.f );
   const float3 light_em = make_float3( 15.0f, 15.0f, 5.0f );
 
   // Floor
@@ -995,7 +999,18 @@ void GIScene::createSceneCornell2(InitialCameraData& camera_data)
   diffuse["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
         make_float3( 0.0f, 0.0f, 0.0f ) ) );
   diffuse["Kd"]->setFloat(0.5,0.5,1.5);
-  diffuse2["Kd"]->setFloat(1.0,1.0,1.0);
+  diffuse["Ks"]->setFloat(0.,0.,0.);
+  diffuse["phong_exp"]->setFloat(1.);
+  diffuse2["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.2f, 0.2f, 0.2f ) ) );
+  diffuse2["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.8f, 0.8f, 0.8f ) ) );
+  diffuse2["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.0f, 0.0f, 0.0f ) ) );
+
+  diffuse2["Kd"]->setFloat(0.0,0.0,0.0);
+  diffuse2["Ks"]->setFloat(1.,1.,1.);
+  diffuse2["phong_exp"]->setFloat(100.);
 
   // Set up parallelogram programs
   std::string ptx_path = ptxpath( "aaf_gi", "parallelogram.cu" );
@@ -1112,6 +1127,8 @@ void GIScene::createSceneSponza(InitialCameraData& camera_data)
   diffuse->setAnyHitProgram( 1, diffuse_ah );
 
   diffuse["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
+  diffuse["Ks"]->setFloat( 0.f, 0.f, 0.f );
+  diffuse["phong_exp"]->setFloat( 1.f );
   diffuse["obj_id"]->setInt(10);
   
   std::string objpath = std::string( sutilSamplesDir() ) + 
@@ -1166,6 +1183,10 @@ void GIScene::createSceneConference(InitialCameraData& camera_data)
         "aaf_gi.cu" ), "closest_hit_direct" );
   diffuse->setClosestHitProgram( 3, diffuse_p );
   diffuse->setAnyHitProgram( 1, diffuse_ah );
+
+  diffuse["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
+  diffuse["Ks"]->setFloat( 0.f, 0.f, 0.f );
+  diffuse["phong_exp"]->setFloat( 1.f );
   
   std::string objpath = std::string( sutilSamplesDir() ) + 
     "/gi_research2/data/conference/conference.obj";
