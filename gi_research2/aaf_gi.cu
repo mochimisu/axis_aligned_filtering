@@ -122,6 +122,7 @@ rtBuffer<float, 2>                 target_spb;
 
 rtDeclareVariable(float3, texcoord, attribute texcoord, ); 
 rtTextureSampler<float4, 2>   diffuse_map;  
+rtTextureSampler<float4, 2>   specular_map;  
 
 //prefilter pass
 //x: number of rejected pixels
@@ -257,11 +258,11 @@ RT_PROGRAM void closest_hit_direct()
   prd_direct.norm = ffnormal;
   float3 cur_Kd = Kd;
   float3 cur_Ks = Ks;
-  float cur_phong_exp = phong_exp;
   if (use_textures)
   {
     float2 uv = make_float2(texcoord);
     cur_Kd = make_float3(tex2D(diffuse_map, uv.x, uv.y));
+    cur_Ks = make_float3(tex2D(specular_map, uv.x, uv.y));
   }
 
   prd_direct.Kd = cur_Kd;
@@ -347,7 +348,7 @@ RT_PROGRAM void sample_direct_z()
   
   world_loc[launch_index] = dir_samp.world_loc;
   direct_illum[launch_index] = dir_samp.incoming_diffuse_light * dir_samp.Kd
-    + dir_samp.incoming_specular_light ;
+    + dir_samp.incoming_specular_light * dir_samp.Ks;
   n[launch_index] = dir_samp.norm;
   Kd_image[launch_index] = dir_samp.Kd;
   Ks_image[launch_index] = dir_samp.Ks;

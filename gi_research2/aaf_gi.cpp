@@ -13,8 +13,9 @@
 // 0: Cornell box
 // 1: Conference
 // 2: Sponza
-// 3: Cornell box 2
-#define SCENE 3
+// 3: Cornell box 2 (Soham's w/ objs)
+// 4: Cornell box 3 (Glossy defined by obj)
+#define SCENE 4
 
 //number of buckets to split hemisphere into
 #define NUM_BUCKETS 1
@@ -110,6 +111,7 @@ private:
   virtual bool keyPressed(unsigned char key, int x, int y);
   void createSceneCornell(InitialCameraData& camera_data);
   void createSceneCornell2(InitialCameraData& camera_data);
+  void createSceneCornell3(InitialCameraData& camera_data);
   void createSceneSponza(InitialCameraData& camera_data);
   void createSceneConference(InitialCameraData& camera_data);
 
@@ -357,6 +359,8 @@ void GIScene::initScene( InitialCameraData& camera_data )
   createSceneSponza(camera_data);
 #elif SCENE == 3
   createSceneCornell2(camera_data);
+#elif SCENE == 4
+  createSceneCornell3(camera_data);
 #endif
   
 
@@ -1189,7 +1193,61 @@ void GIScene::createSceneConference(InitialCameraData& camera_data)
   diffuse["phong_exp"]->setFloat( 1.f );
   
   std::string objpath = std::string( sutilSamplesDir() ) + 
-    "/gi_research2/data/conference/conference.obj";
+    "/gi_research2/data/conference/conference_diffuse.obj";
+  ObjLoader * conference_loader = new ObjLoader( objpath.c_str(), 
+      m_context, conference_geom_group, diffuse, true );
+  conference_loader->load();
+
+  m_context["vfov"]->setFloat( vfov );
+  
+  m_context["top_object"]->set( conference_geom_group );
+  m_context["top_shadower"]->set( conference_geom_group );
+}
+
+void GIScene::createSceneCornell3(InitialCameraData& camera_data)
+{
+  m_use_textures = true;
+  // Set up camera
+  const float vfov = 35.f;
+  
+  camera_data = InitialCameraData( 
+      make_float3( 0.f, 1.0f, 3.0f ), // eye
+      make_float3( 0.0f, 0.75f, 0.0f ),    // lookat
+      make_float3( 0.0f, 1.0f,  0.0f ),       // up
+      vfov );                                // vfov
+
+  ParallelogramLight light;
+  light.corner   = make_float3( 0.0f, 1.5f, 0.0f);
+  light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
+  light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
+  light.normal   = normalize( cross(light.v1, light.v2) );
+  light.emission = make_float3( 15.0f, 15.0f, 5.0f );
+  
+  Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
+  light_buffer->setFormat( RT_FORMAT_USER );
+  light_buffer->setElementSize( sizeof( ParallelogramLight ) );
+  light_buffer->setSize( 1u );
+  memcpy( light_buffer->map(), &light, sizeof( light ) );
+  light_buffer->unmap();
+  m_context["lights"]->setBuffer( light_buffer ); 
+  
+  GeometryGroup conference_geom_group = m_context->createGeometryGroup();
+  
+
+  Material diffuse = m_context->createMaterial();
+  Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+        "aaf_gi.cu" ), "shadow" );
+  Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+        "aaf_gi.cu" ), "closest_hit_direct" );
+  diffuse->setClosestHitProgram( 3, diffuse_p );
+  diffuse->setAnyHitProgram( 1, diffuse_ah );
+
+  diffuse["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
+  diffuse["Ks"]->setFloat( 0.f, 0.f, 0.f );
+  diffuse["phong_exp"]->setFloat( 1.f );
+  
+  std::string objpath = std::string( sutilSamplesDir() ) + 
+    "/gi_research2/data/cornell_box/CornellBox-Glossy.obj";
   ObjLoader * conference_loader = new ObjLoader( objpath.c_str(), 
       m_context, conference_geom_group, diffuse, true );
   conference_loader->load();
