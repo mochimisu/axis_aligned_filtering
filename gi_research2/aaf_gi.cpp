@@ -21,8 +21,8 @@
 #define NUM_BUCKETS 1
 
 //number of maximum samples per pixel
-//#define MAX_SPP 100
-#define MAX_SPP 25
+#define MAX_SPP 100
+//#define MAX_SPP 25
 
 //depth of indirect bounces
 #define INDIRECT_BOUNCES 1
@@ -1136,7 +1136,7 @@ void GIScene::createSceneSponza(InitialCameraData& camera_data)
   diffuse["obj_id"]->setInt(10);
   
   std::string objpath = std::string( sutilSamplesDir() ) + 
-    "/gi_research/data/crytek_sponza/sponza.obj";
+    "/gi_research2/data/crytek_sponza/sponza_noflag.obj";
   ObjLoader * conference_loader = new ObjLoader( objpath.c_str(), 
       m_context, conference_geom_group, diffuse, true );
   conference_loader->load();
