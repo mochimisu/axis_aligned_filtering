@@ -1105,7 +1105,7 @@ void GIScene::createSceneSponza(InitialCameraData& camera_data)
 
 
   ParallelogramLight light;
-  light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
+  light.corner   = make_float3( 580.0f, 500.f, 0.f);
   light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
   light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
   light.normal   = normalize( cross(light.v1, light.v2) );
