@@ -54,6 +54,7 @@
 #include <sampleConfig.h>
 #include <sstream>
 #include <iostream>
+#include <fstream>
 #include <iomanip>
 #include <ObjLoader.h>
 
@@ -425,7 +426,54 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
         Buffer output_buf = scene.getOutputBuffer();
         sutilDisplayFilePPM(fname.str().c_str(), output_buf->get());
         output_num++;
-        std::cout << "Saved file" << std::endl;
+        std::cout << "Saved file" << fname.str() << std::endl;
+        return true;
+      }
+    case 'D':
+    case 'd':
+      {
+        std::stringstream fname;
+        fname << "output_";
+        fname << std::setw(7) << std::setfill('0') << output_num;
+        fname << ".pfm";
+        output_num++;
+
+        Buffer output_buf = scene.getOutputBuffer();
+        RTsize buffer_width, buffer_height;
+        output_buf->getSize( buffer_width, buffer_height );
+
+
+
+        //assuming float4, ignore alpha channel
+        std::vector<float> output(buffer_width*buffer_height*4);
+        unsigned char* outbuf_byte_vals = 
+          reinterpret_cast<unsigned char*>(output_buf->map());
+        float4* outbuf_float_vals = reinterpret_cast<float4*>(outbuf_byte_vals);
+        float max_val = 0.f;
+
+        for(int i = 0; i < buffer_width; ++i)
+          for(int j = 0; j < buffer_height; ++j)
+          {
+            //copy every 3, ignore alpha channel
+            //image is upside down
+            memcpy(&output[(i+(buffer_height-j)*buffer_width)*3], 
+                &outbuf_float_vals[i+j*buffer_width], sizeof(float)*3);
+            max_val = max(max_val, outbuf_float_vals[i+j*buffer_width].x);
+            max_val = max(max_val, outbuf_float_vals[i+j*buffer_width].y);
+            max_val = max(max_val, outbuf_float_vals[i+j*buffer_width].z);
+          }
+        output_buf->unmap();
+        
+        std::ofstream ofs(fname.str().c_str(), std::ios::binary);
+        ofs << "PF\n" << buffer_width << " " << buffer_height << "\n"
+          << "-1.0\n";
+          //<< -max_val << "\n";
+
+        ofs.write(
+            reinterpret_cast<const char*>(output.data()), 
+            buffer_width*buffer_height*sizeof(float)*3);
+
+        std::cout << "Saved file: " << fname.str() << std::endl;
         return true;
       }
     case 'Z':
@@ -488,7 +536,6 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
       {
         Buffer buffer = m_context["output_buffer"]->getBuffer();
         RTsize buffer_width, buffer_height;
-        buffer->getSize( buffer_width, buffer_height );
         RTsize bucket_buffer_height = buffer_height * num_buckets;
         Buffer spb_buf = m_context["target_spb"]->getBuffer();
         Buffer spb_theo_buf = m_context["target_spb_theoretical"]->getBuffer();
@@ -1292,7 +1339,8 @@ void printUsageAndExit( const std::string& argv0, bool doExit = true )
     << "Number Keys: Switch between buckets in supported debug views. " 
     << std::endl
     << "0: View combined bucket in supported debug views" << std::endl
-    << "s: Save current buffer to file. " << std::endl
+    << "s: Save current buffer to file (PPM). " << std::endl
+    << "d: Save current buffer to file (PFM). " << std::endl
     << "x: Print maximum heatmap value if viewing a heatmap" << std::endl;
   //GLUTDisplay::printUsage();
 
