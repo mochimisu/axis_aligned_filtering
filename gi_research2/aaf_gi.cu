@@ -87,19 +87,26 @@ struct PerRayData_direct
   float3 norm;
   float3 Kd;
   float3 Ks;
+  float phong_exp;
   float z_dist;
   bool hit;
 };
 rtBuffer<float3, 2>               direct_illum;
 rtBuffer<float3, 2>               indirect_illum;
 rtBuffer<float3, 2>               indirect_illum_filter1d;
+//specular buffers
+rtBuffer<float3, 2>               indirect_illum_spec;
+rtBuffer<float3, 2>               indirect_illum_spec_filter1d;
+
 rtBuffer<float3, 2>               Kd_image;
 rtBuffer<float3, 2>               Ks_image;
+rtBuffer<float, 2>                phong_exp_image;
 rtBuffer<float2, 2>               z_dist;
 rtBuffer<float2, 2>               z_dist_filter1d;
 rtBuffer<float3, 2>               world_loc;
 rtBuffer<float3, 2>               n;
 rtBuffer<float, 2>                depth;
+rtBuffer<float, 2>                spec_wvmax;
 rtBuffer<char, 2>                 visible;
 rtDeclareVariable(float3,   Kd, , );
 rtDeclareVariable(float3,   Ks, , );
@@ -120,6 +127,9 @@ rtDeclareVariable(float, max_heatmap, , );
 rtBuffer<float, 2>                 target_spb_theoretical;
 rtBuffer<float, 2>                 target_spb;
 
+rtBuffer<float, 2>                 target_spb_spec_theoretical;
+rtBuffer<float, 2>                 target_spb_spec;
+
 rtDeclareVariable(float3, texcoord, attribute texcoord, ); 
 rtTextureSampler<float4, 2>   diffuse_map;  
 rtTextureSampler<float4, 2>   specular_map;  
@@ -129,6 +139,64 @@ rtTextureSampler<float4, 2>   specular_map;
 //y: number of possible filtered pixels
 rtBuffer<uint2, 2>                prefilter_rejected_filter1d;
 rtBuffer<uint2, 2>                prefilter_rejected;
+
+
+//omegaxf and sampling functions
+__device__ __inline__ float glossy_blim(float3& r, float3& c, float m){
+float vc = tan(acos(dot(r,c))); //r, c must be unit vectors
+float        p00 =       2.017;
+float        p10 =      0.2575;
+float        p01 =       0.537;
+float        p20 =    -0.05937;
+float        p11 =     -0.1894;
+float        p02 =    -0.03605;
+float        p30 =    0.005778;
+float        p21 =     0.03843;
+float        p12 =    0.001897;
+float        p03 =    0.001631;
+float        p40 =  -0.0002033;
+float        p31 =   -0.003547;
+float        p22 =  -0.0002067;
+float        p13 = -1.068e-005;
+float        p04 = -3.413e-005;
+float        p41 =   0.0001219;
+float        p32 =  7.471e-006;
+float        p23 =  6.913e-007;
+float        p14 = -7.882e-009;
+float        p05 =  2.601e-007;
+
+float vc2 = vc*vc;
+float vc3 = vc2*vc;
+float vc4 = vc2*vc2;
+float m2 = m*m;
+float m3 = m2*m;
+float m4 = m2*m2;
+float m5 = m4*m;
+
+return (p00 + p10*vc + p01*m + p20*vc2 + p11*vc*m + p02*m2 + p30*vc3 
+    + p21*vc2*m + p12*vc*m2 + p03*m3 + p40*vc4 + p31*vc3*m + p22*vc2*m2  
+    + p13*vc*m3 + p04*m4 + p41*vc4*m + p32*vc3*m2 + p23*vc2*m3
+    + p14*vc*m4 + p05*m5);
+}
+
+// sample hemisphere with cosine^n density
+__device__ __inline__ void sampleUnitHemispherePower( const optix::float2& sample,
+  const optix::float3& U,
+  const optix::float3& V,
+  const optix::float3& W,
+  const float power,
+  optix::float3& point)
+{
+  using namespace optix;
+
+  float phi = 2.f * M_PIf*sample.x;
+  float r = sqrt(1 - pow(sample.y, 2.f/(power+1)));
+  float x = r * cos(phi);
+  float y = r * sin(phi);
+  float z = pow(sample.y, 1.f/(power+1));
+
+  point = x*U + y*V + z*W;
+}
 
 
 
@@ -189,16 +257,19 @@ __device__ __inline__ bool indirectFilterThresholds(
 
 __device__ __inline__ float filterWeight(
     float proj_distsq, const float3& target_n, const float3& cur_n,
-    float cur_zpmin)
+    float cur_zpmin, float wvmax)
 {
   return gaussFilter(proj_distsq,
-      2.f*(1.f+50.f*acos(dot(target_n,cur_n)))/cur_zpmin);
+      wvmax*(1.f+50.f*acos(dot(target_n,cur_n)))/cur_zpmin);
 }
 
 
 __device__ __inline__ void indirectFilter( 
     float3& blurred_indirect_sum,
     float& sum_weight,
+    float3& blurred_indirect_spec_sum,
+    float& sum_weight_spec,
+    const float cur_spec_wvmax,
     const float3& cur_world_loc,
     float3 cur_n,
     float cur_zpmin,
@@ -228,14 +299,24 @@ __device__ __inline__ void indirectFilter(
     float proj_distsq = euclidean_distsq - rDn*rDn;
     float3 target_n = n[target_index];
 
-    float weight = filterWeight(proj_distsq, target_n, cur_n, cur_zpmin);
+    float diff_weight = filterWeight(proj_distsq, target_n, cur_n, cur_zpmin,
+        2.);
+    float spec_weight = filterWeight(proj_distsq, target_n, cur_n, cur_zpmin,
+        cur_spec_wvmax);
 
     float3 target_indirect = indirect_illum[target_bucket_index];
+    float3 target_indirect_spec = indirect_illum_spec[target_bucket_index];
     if (pass == 1)
+    {
       target_indirect = indirect_illum_filter1d[target_bucket_index];
+      target_indirect_spec = indirect_illum_spec_filter1d[target_bucket_index];
+    }
 
-    blurred_indirect_sum += weight * target_indirect;
-    sum_weight += weight;
+    blurred_indirect_sum += diff_weight * target_indirect;
+    sum_weight += diff_weight;
+
+    blurred_indirect_spec_sum += spec_weight * target_indirect_spec;
+    sum_weight_spec += spec_weight;
   }
 }
 
@@ -267,6 +348,7 @@ RT_PROGRAM void closest_hit_direct()
 
   prd_direct.Kd = cur_Kd;
   prd_direct.Ks = cur_Ks;
+  prd_direct.phong_exp = phong_exp;
 
   //lights
   unsigned int num_lights = lights.size();
@@ -353,6 +435,22 @@ RT_PROGRAM void sample_direct_z()
   Kd_image[launch_index] = dir_samp.Kd;
   Ks_image[launch_index] = dir_samp.Ks;
   depth[launch_index] = dir_samp.z_dist;
+
+
+  //assuming 1 light for specular omegavmax calculation
+  ParallelogramLight light = lights[0];
+  float3 L = normalize(light.corner - world_loc[launch_index]);
+  float3 cur_n = n[launch_index];
+  float3 R = normalize(2*cur_n*dot(cur_n,L)-L);
+  float3 to_camera = -ray_direction;
+
+  //use R with light or R from camera?
+  float3 perf_refl_r = ray_direction - 2*cur_n * dot(cur_n, ray_direction);
+  float cur_spec_wvmax = glossy_blim(perf_refl_r, to_camera, 
+      dir_samp.phong_exp);
+  phong_exp_image[launch_index] = dir_samp.phong_exp;
+  spec_wvmax[launch_index] = cur_spec_wvmax;
+
 
   int initial_bucket_samples_sqrt = 2;
   int initial_bucket_samples = initial_bucket_samples_sqrt
@@ -457,17 +555,29 @@ RT_PROGRAM void sample_indirect()
   size_t2 screen_size = output_buffer.size();
   float proj_dist = 2./screen_size.y * depth[screen_index] 
     * tan(vfov/2.*M_PI/180.);
-  float wvmax = 2; //Constant for now (diffuse)
+  float diff_wvmax = 2; //Constant for now (diffuse)
   float alpha = 1;
-  float spp_term1 = proj_dist * wvmax/cur_zd.x + alpha;
+  float spp_term1 = proj_dist * diff_wvmax/cur_zd.x + alpha;
   float spp_term2 = 1+cur_zd.y/cur_zd.x;
 
-  float spp = spp_term1*spp_term1 * wvmax*wvmax * spp_term2*spp_term2;
+  float spp = spp_term1*spp_term1 * diff_wvmax*diff_wvmax 
+    * spp_term2*spp_term2;
+
+
+  float cur_spec_wvmax = spec_wvmax[screen_index];
+  float spp_spec_term1 = proj_dist * cur_spec_wvmax/cur_zd.x + alpha;
+
+  float spec_spp = spp_spec_term1 * spp_spec_term1 
+    * cur_spec_wvmax*cur_spec_wvmax
+    * spp_term2*spp_term2;
+
   
   //account for split buckets
   spp /= num_buckets;
+  spec_spp /= num_buckets;
 
   target_spb_theoretical[launch_index] = spp;
+  target_spb_spec_theoretical[launch_index] = spec_spp;
 
   uint2 pf_rej = prefilter_rejected[launch_index];
 
@@ -475,55 +585,118 @@ RT_PROGRAM void sample_indirect()
       min(spp / (1.f-(float)pf_rej.x/pf_rej.y), 
         (float)max_spb_pass),
       1.f);
+  spec_spp = max( min(spp, (float)max_spb_pass), 1.f); 
+  //TODO: distribute samples according to kd to ks ratio, account for prefilt
 
   float spp_sqrt = sqrt(spp);
   int spp_sqrt_int = (int) ceil(spp_sqrt);
   int spp_int = spp_sqrt_int * spp_sqrt_int;
   target_spb[launch_index] = spp_int;
 
+  float spp_spec_sqrt = sqrt(spec_spp);
+  int spp_spec_sqrt_int = (int) ceil(spp_spec_sqrt);
+  int spp_spec_int = spp_spec_sqrt_int * spp_spec_sqrt_int;
+  target_spb_spec[launch_index] = spp_spec_int;
+
   float3 first_hit = world_loc[screen_index];
   float3 normal = n[screen_index];
   float3 Kd = Kd_image[screen_index];
 
-  //sample this hemisphere according to our spp
-  float3 incoming_indirect = make_float3(0);
+  //diffuse
+  //sample this hemisphere with cosine (aligned to normal) weighting
+  float3 incoming_diff_indirect = make_float3(0);
+  float3 incoming_spec_indirect = make_float3(0);
   unsigned int seed = tea<16>(bucket.x*launch_index.y+launch_index.x,
       frame_number); //TODO :verify
   for (int samp = 0; samp < spp_int; ++samp)
+  {
+    PerRayData_direct prd;
+    float3 ray_origin = first_hit;
+    float3 ray_n = normal;
+    float3 rn_u, rn_v, rn_w;
+    float3 sample_dir;
+    float3 sample_color = make_float3(0);
+    for (int depth = 0; depth < indirect_ray_depth; ++depth)
     {
-      PerRayData_direct prd;
-      float3 ray_origin = first_hit;
-      float3 ray_n = normal;
-      float3 rn_u, rn_v, rn_w;
-      float3 sample_dir;
-      float3 sample_color = make_float3(0);
-      for (int depth = 0; depth < indirect_ray_depth; ++depth)
-      {
-        prd.hit = false;
-        createONB(ray_n, rn_u, rn_v, rn_w);
-        float2 rand_samp = make_float2(rnd(seed), rnd(seed));
-        //stratify x,y
-        rand_samp.x = (samp%spp_sqrt_int + rand_samp.x)/spp_sqrt_int;
-        rand_samp.y = (((int)samp/spp_sqrt_int) + rand_samp.y)/spp_sqrt_int;
+      prd.hit = false;
+      createONB(ray_n, rn_u, rn_v, rn_w);
+      float2 rand_samp = make_float2(rnd(seed), rnd(seed));
+      //stratify x,y
+      rand_samp.x = (samp%spp_sqrt_int + rand_samp.x)/spp_sqrt_int;
+      rand_samp.y = (((int)samp/spp_sqrt_int) + rand_samp.y)/spp_sqrt_int;
 
-        //sample inside appropriate bucket
-        rand_samp.x = (cur_bucket + rand_samp.x)/num_buckets;
-        sampleUnitHemisphere(rand_samp, rn_u, rn_v, rn_w, sample_dir);
-        
-        Ray ray = make_Ray(ray_origin, sample_dir,
-            direct_ray_type, scene_epsilon, RT_DEFAULT_MAX);
-        rtTrace(top_object, ray, prd);
-        if (!prd.hit)
-          break;
-        sample_color += prd.incoming_diffuse_light * prd.Kd;
-        ray_origin = prd.world_loc;
-        ray_n = prd.norm;
-      }
-      incoming_indirect += sample_color;
+      //sample inside appropriate bucket
+      rand_samp.x = (cur_bucket + rand_samp.x)/num_buckets;
+      sampleUnitHemisphere(rand_samp, rn_u, rn_v, rn_w, sample_dir);
+
+      Ray ray = make_Ray(ray_origin, sample_dir,
+          direct_ray_type, scene_epsilon, RT_DEFAULT_MAX);
+      rtTrace(top_object, ray, prd);
+      if (!prd.hit)
+        break;
+      sample_color += prd.incoming_diffuse_light * prd.Kd 
+        + prd.incoming_specular_light * prd.Ks;
+      ray_origin = prd.world_loc;
+      ray_n = prd.norm;
     }
-  incoming_indirect /= (float)spp_int;
+    incoming_diff_indirect += sample_color;
+  }
+  incoming_diff_indirect /= (float)spp_int;
+
+  //specular
+  //sample this hemisphere with cos^n (aligned to reflected angle) weighting
+  float cur_phong_exp = phong_exp_image[screen_index];
+  for (int samp = 0; samp < spp_spec_int; ++samp)
+  {
+    PerRayData_direct prd;
+    float3 ray_origin = first_hit;
+    float3 ray_n = normal;
+    float3 rns_u, rns_v, rns_w;
+    float3 prev_dir = normalize(first_hit-eye);
+
+    float3 sample_dir;
+    float3 sample_specular_color = make_float3(0);
+    for (int depth = 0; depth < indirect_ray_depth; ++depth)
+    {
+      prd.hit = false;
+
+      float3 perf_refl = prev_dir - 2*ray_n*dot(ray_n, prev_dir);
+      createONB(perf_refl, rns_u, rns_v, rns_w);
+
+      float2 rand_samp = make_float2(rnd(seed), rnd(seed));
+      //stratify x,y
+      rand_samp.x = (samp%spp_spec_sqrt_int + rand_samp.x)/spp_spec_sqrt_int;
+      rand_samp.y = (((int)samp/spp_spec_sqrt_int) + rand_samp.y)
+        /spp_spec_sqrt_int;
+
+      //sample inside appropriate bucket
+      rand_samp.x = (cur_bucket + rand_samp.x)/num_buckets;
+      sampleUnitHemispherePower(rand_samp, rns_u, rns_v, rns_w, cur_phong_exp,
+          sample_dir);
+
+      Ray ray = make_Ray(ray_origin, sample_dir,
+          direct_ray_type, scene_epsilon, RT_DEFAULT_MAX);
+      rtTrace(top_object, ray, prd);
+      if (!prd.hit)
+        break;
+
+      //move this somewhere else...
+      float nDl = max(dot(ray_n,sample_dir),0.f);
+
+      sample_specular_color += (prd.incoming_specular_light * prd.Ks 
+        + prd.incoming_diffuse_light * prd.Kd) * nDl 
+        * 2.f/(cur_phong_exp+1);
+
+      ray_origin = prd.world_loc;
+      ray_n = prd.norm;
+      prev_dir = sample_dir;
+    }
+    incoming_spec_indirect += sample_specular_color;
+  }
+  incoming_spec_indirect /= (float)spp_spec_int;
   
-  indirect_illum[launch_index] = incoming_indirect;
+  indirect_illum[launch_index] = incoming_diff_indirect;
+  indirect_illum_spec[launch_index] = incoming_spec_indirect;
 
 }
 RT_PROGRAM void indirect_filter_first_pass()
@@ -537,6 +710,11 @@ RT_PROGRAM void indirect_filter_first_pass()
   float3 blurred_indirect_sum = make_float3(0.f);
   float sum_weight = 0.f;
 
+  float3 blurred_indirect_spec_sum = make_float3(0.f);
+  float sum_weight_spec = 0.f;
+
+  float cur_spec_wvmax = spec_wvmax[screen_index];
+
   float3 cur_world_loc = world_loc[screen_index];
   float3 cur_n = n[screen_index];
 
@@ -545,6 +723,7 @@ RT_PROGRAM void indirect_filter_first_pass()
     {
       uint2 target_index = make_uint2(screen_index.x+i, screen_index.y);
       indirectFilter(blurred_indirect_sum, sum_weight,
+          blurred_indirect_spec_sum, sum_weight_spec, cur_spec_wvmax,
           cur_world_loc, cur_n, cur_zmin,
           target_index, buf_size, 0, cur_bucket);
     }
@@ -553,6 +732,12 @@ RT_PROGRAM void indirect_filter_first_pass()
     indirect_illum_filter1d[launch_index] = blurred_indirect_sum/sum_weight;
   else
     indirect_illum_filter1d[launch_index] = indirect_illum[launch_index];
+  if (sum_weight_spec > 0.0001f)
+    indirect_illum_spec_filter1d[launch_index] = blurred_indirect_spec_sum
+      /sum_weight_spec;
+  else
+    indirect_illum_spec_filter1d[launch_index] = 
+      indirect_illum_spec[launch_index];
 }
 RT_PROGRAM void indirect_filter_second_pass()
 {
@@ -565,6 +750,12 @@ RT_PROGRAM void indirect_filter_second_pass()
   float3 blurred_indirect_sum = make_float3(0.f);
   float sum_weight = 0.f;
 
+  float3 blurred_indirect_spec_sum = make_float3(0.f);
+  float sum_weight_spec = 0.f;
+
+  float cur_spec_wvmax = spec_wvmax[screen_index];
+
+
   float3 cur_world_loc = world_loc[screen_index];
   float3 cur_n = n[screen_index];
 
@@ -573,6 +764,7 @@ RT_PROGRAM void indirect_filter_second_pass()
     {
       uint2 target_index = make_uint2(screen_index.x, screen_index.y+i);
       indirectFilter(blurred_indirect_sum, sum_weight,
+          blurred_indirect_spec_sum, sum_weight_spec, cur_spec_wvmax,
           cur_world_loc, cur_n, cur_zmin,
           target_index, buf_size, 1, cur_bucket);
     }
@@ -581,6 +773,12 @@ RT_PROGRAM void indirect_filter_second_pass()
     indirect_illum[launch_index] = blurred_indirect_sum/sum_weight;
   else
     indirect_illum[launch_index] = indirect_illum_filter1d[launch_index];
+  if (sum_weight_spec > 0.0001f)
+    indirect_illum_spec[launch_index] = blurred_indirect_spec_sum
+      /sum_weight_spec;
+  else
+    indirect_illum_spec[launch_index] = 
+      indirect_illum_spec_filter1d[launch_index];
 
 }
 RT_PROGRAM void indirect_prefilter_first_pass()
@@ -615,7 +813,8 @@ RT_PROGRAM void indirect_prefilter_first_pass()
         float proj_distsq = euclidean_distsq - rDn*rDn;
         float3 target_n = n[target_index];
 
-        float weight = filterWeight(proj_distsq, target_n, cur_n, cur_zmin);
+        float weight = filterWeight(proj_distsq, target_n, cur_n, cur_zmin, 
+            2.);
         if (weight > 0.01)
         {
           cur_prefilter_rej.x += (!can_filter);
@@ -658,7 +857,8 @@ RT_PROGRAM void indirect_prefilter_second_pass()
         float proj_distsq = euclidean_distsq - rDn*rDn;
         float3 target_n = n[target_index];
 
-        float weight = filterWeight(proj_distsq, target_n, cur_n, cur_zmin);
+        float weight = filterWeight(proj_distsq, target_n, cur_n, cur_zmin, 
+            2.);
         if (weight > 0.01)
         {
           uint2 target_bucket_index = make_uint2(launch_index.x+i,
@@ -698,15 +898,23 @@ __device__ __inline__ float3 heatMap(float val) {
 RT_PROGRAM void display()
 {
   float3 indirect_illum_combined = make_float3(0);
+  float3 indirect_illum_spec_combined = make_float3(0);
   for (int i = 0; i < num_buckets; ++i)
   {
     indirect_illum_combined += indirect_illum[make_uint2(launch_index.x, 
         launch_index.y*num_buckets+i)];
+    indirect_illum_spec_combined += indirect_illum_spec[
+      make_uint2(launch_index.x, launch_index.y*num_buckets+i)];
   }
 
-  indirect_illum_combined *= Kd_image[launch_index]/num_buckets;
+  indirect_illum_combined /= num_buckets;
+  float3 indirect_illum_full = indirect_illum_combined * Kd_image[launch_index];
+  indirect_illum_spec_combined /= num_buckets;
+  float3 indirect_illum_spec_full = indirect_illum_spec_combined 
+    * Ks_image[launch_index];
   output_buffer[launch_index] = make_float4(
-      direct_illum[launch_index] + indirect_illum_combined,1);
+      direct_illum[launch_index] 
+      + indirect_illum_spec_full + indirect_illum_full,1);
 
   //other view modes
   if (view_mode)
@@ -721,19 +929,60 @@ RT_PROGRAM void display()
     {
       if (view_separated_bucket)
         output_buffer[launch_index] = make_float4(
-            indirect_illum[target_bucket_index] * Kd_image[launch_index],1);
+            indirect_illum[target_bucket_index] * Kd_image[launch_index]
+            + indirect_illum_spec[target_bucket_index] * Ks_image[launch_index]
+            ,1);
       else
-        output_buffer[launch_index] = make_float4(indirect_illum_combined,1);
+        output_buffer[launch_index] = make_float4(
+            indirect_illum_full+indirect_illum_spec_full,1);
     }
     if (view_mode == 3)
+    {
+      if (view_separated_bucket)
+        output_buffer[launch_index] = make_float4(
+            indirect_illum[target_bucket_index]
+            +indirect_illum_spec[target_bucket_index],1);
+      else
+        output_buffer[launch_index] = make_float4(
+            indirect_illum_combined+indirect_illum_spec_combined,1);
+    }
+    if (view_mode == 4)
+    {
+      if (view_separated_bucket)
+        output_buffer[launch_index] = make_float4(
+            indirect_illum[target_bucket_index] * Kd_image[launch_index],1);
+      else
+        output_buffer[launch_index] = make_float4(indirect_illum_full,1);
+    }
+    if (view_mode == 5)
     {
       if (view_separated_bucket)
         output_buffer[launch_index] = make_float4(
             indirect_illum[target_bucket_index],1);
       else
         output_buffer[launch_index] = make_float4(
-            indirect_illum_combined/Kd_image[launch_index],1);
+            indirect_illum_combined,1);
     }
+
+    if (view_mode == 6)
+    {
+      if (view_separated_bucket)
+        output_buffer[launch_index] = make_float4(
+            Ks_image[launch_index]*indirect_illum_spec[target_bucket_index],1);
+      else
+        output_buffer[launch_index] = make_float4(
+            indirect_illum_spec_full,1);
+    }
+    if (view_mode == 7)
+    {
+      if (view_separated_bucket)
+        output_buffer[launch_index] = make_float4(
+            indirect_illum_spec[target_bucket_index],1);
+      else
+        output_buffer[launch_index] = make_float4(
+            indirect_illum_spec_combined,1);
+    }
+
   }
 
 }
@@ -747,7 +996,7 @@ RT_PROGRAM void display_heatmaps()
       && (view_bucket <= num_buckets);
     uint2 target_bucket_index = make_uint2(launch_index.x, 
         launch_index.y*num_buckets+view_bucket-1);
-    if (view_mode == 4)
+    if (view_mode == 8)
     {
       if (view_separated_bucket)
         output_buffer[launch_index] = make_float4(heatMap(
@@ -766,7 +1015,7 @@ RT_PROGRAM void display_heatmaps()
               max_heatmap));
       }
     }
-    if (view_mode == 5)
+    if (view_mode == 9)
     {
       if (view_separated_bucket)
         output_buffer[launch_index] = make_float4(heatMap(
@@ -786,7 +1035,7 @@ RT_PROGRAM void display_heatmaps()
 
       }
     }
-    if (view_mode == 6)
+    if (view_mode == 10)
     {
       if (view_separated_bucket)
         output_buffer[launch_index] = make_float4(heatMap(
@@ -804,7 +1053,7 @@ RT_PROGRAM void display_heatmaps()
       }
 
     }
-    if (view_mode == 7)
+    if (view_mode == 11)
     {
       if (view_separated_bucket)
         output_buffer[launch_index] = make_float4(heatMap(
@@ -821,7 +1070,7 @@ RT_PROGRAM void display_heatmaps()
               /(max_heatmap*num_buckets)));
       }
     }
-    if (view_mode == 8)
+    if (view_mode == 12)
     {
       if (view_separated_bucket)
         output_buffer[launch_index] = make_float4(heatMap(
@@ -841,6 +1090,46 @@ RT_PROGRAM void display_heatmaps()
         output_buffer[launch_index] = make_float4(heatMap(
               (float)
               combined_rejected.x/combined_rejected.y/max_heatmap));
+      }
+    }
+    if (view_mode == 13)
+    {
+      output_buffer[launch_index] = make_float4(heatMap(
+            spec_wvmax[launch_index]/max_heatmap));
+    }
+    if (view_mode == 14)
+    {
+      if (view_separated_bucket)
+        output_buffer[launch_index] = make_float4(heatMap(
+              target_spb_spec[target_bucket_index]/max_heatmap));
+      else
+      {
+        float combined_spp;
+        for (int i = 0; i < num_buckets; ++i)
+        {
+          combined_spp += target_spb_spec[make_uint2(launch_index.x,
+              launch_index.y*num_buckets+i)];
+        }
+        output_buffer[launch_index] = make_float4(heatMap(combined_spp
+              /(max_heatmap*num_buckets)));
+      }
+
+    }
+    if (view_mode == 15)
+    {
+      if (view_separated_bucket)
+        output_buffer[launch_index] = make_float4(heatMap(
+              target_spb_spec_theoretical[target_bucket_index]/max_heatmap));
+      else
+      {
+        float combined_spp;
+        for (int i = 0; i < num_buckets; ++i)
+        {
+          combined_spp += target_spb_spec_theoretical[
+            make_uint2(launch_index.x, launch_index.y*num_buckets+i)];
+        }
+        output_buffer[launch_index] = make_float4(heatMap(combined_spp
+              /(max_heatmap*num_buckets)));
       }
     }
   }

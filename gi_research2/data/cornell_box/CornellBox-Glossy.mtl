@@ -10,7 +10,8 @@
 # http://scholar.google.com/scholar?q=global+illumination+using+photon+maps+jensen&hl=en&as_sdt=0&as_vis=1&oi=scholart 
 #
 newmtl sphere						
-	Ns 32
+	#Ns 32
+	Ns 3
 	d 1
 	Tr 0
 	Tf 1 1 1

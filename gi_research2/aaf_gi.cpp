@@ -21,8 +21,8 @@
 #define NUM_BUCKETS 1
 
 //number of maximum samples per pixel
-#define MAX_SPP 100
-//#define MAX_SPP 25
+//#define MAX_SPP 100
+#define MAX_SPP 25
 
 //depth of indirect bounces
 #define INDIRECT_BOUNCES 1
@@ -257,6 +257,9 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context["indirect_illum"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT3, m_width, m_height*num_buckets));
+  m_context["indirect_illum_spec"]->set(
+      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+        RT_FORMAT_FLOAT3, m_width, m_height*num_buckets));
 
   //Image-space Kd, Ks buffers
   m_context["Kd_image"]->set(
@@ -265,6 +268,9 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context["Ks_image"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT3, m_width, m_height));
+  m_context["phong_exp_image"]->set(
+      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+        RT_FORMAT_FLOAT, m_width, m_height));
 
   //Target SPP
   m_context["target_indirect_spp"]->set(
@@ -303,12 +309,22 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context["indirect_illum_filter1d"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT3, m_width, m_height*num_buckets));
+  m_context["indirect_illum_spec_filter1d"]->set(
+      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+        RT_FORMAT_FLOAT3, m_width, m_height*num_buckets));
 
   //spp buffer
   m_context["target_spb"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
         RT_FORMAT_FLOAT, m_width, m_height*num_buckets));
   m_context["target_spb_theoretical"]->set(
+      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+        RT_FORMAT_FLOAT, m_width, m_height*num_buckets));
+
+  m_context["target_spb_spec"]->set(
+      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+        RT_FORMAT_FLOAT, m_width, m_height*num_buckets));
+  m_context["target_spb_spec_theoretical"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
         RT_FORMAT_FLOAT, m_width, m_height*num_buckets));
 
@@ -319,6 +335,11 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context["prefilter_rejected_filter1d"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
         RT_FORMAT_INT2, m_width, m_height*num_buckets));
+
+  //specular omegavmax buffer
+  m_context["spec_wvmax"]->set(
+      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+        RT_FORMAT_FLOAT, m_width, m_height));
 
 
   //View Mode for displaying different buffers
@@ -385,9 +406,9 @@ void GIScene::initScene( InitialCameraData& camera_data )
 bool GIScene::keyPressed( unsigned char key, int x, int y )
 {
   int idelta = 1;
-  int num_view_modes = 4;
+  int num_view_modes = 8;
 #ifdef DEBUG_BUF
-  num_view_modes = 9;
+  num_view_modes = 16;
 #endif
   switch(key)
   {
@@ -493,25 +514,51 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
           std::cout << "View mode: Indirect Only" << std::endl;
           break;
         case 3:
-          std::cout << "View mode: Indirect Only (No Kd multiplication)" 
+          std::cout << "View mode: Indirect Only (No Kd, Ks multiplication)" 
             << std::endl;
           break;
         case 4:
-          std::cout << "View mode: Z min" << std::endl;
+          std::cout << "View mode: Diffuse Indirect Only" << std::endl;
           break;
         case 5:
-          std::cout << "View mode: Z max" << std::endl;
+          std::cout << "View mode: Diffuse Indirect Only "
+            << "(No Kd multiplication)" << std::endl;
           break;
         case 6:
-          std::cout << "View mode: Target SPP/SPB" << std::endl;
+          std::cout << "View mode: Specular Indirect Only" << std::endl;
           break;
         case 7:
+          std::cout << "View mode: Specular Indirect Only " 
+            << "(No Ks multiplication)" << std::endl;
+          break;
+
+        case 8:
+          std::cout << "View mode: Z min" << std::endl;
+          break;
+        case 9:
+          std::cout << "View mode: Z max" << std::endl;
+          break;
+        case 10:
+          std::cout << "View mode: Target SPP/SPB" << std::endl;
+          break;
+        case 11:
           std::cout << "View mode: Target SPP/SPB (theoretical/unclamped)" 
             << std::endl;
           break;
-        case 8:
+        case 12:
           std::cout << "View mode: Rejected Sample Ratio" 
             << std::endl;
+          break;
+        case 13:
+          std::cout << "View mode: Specular omega v max" 
+            << std::endl;
+          break;
+        case 14:
+          std::cout << "View mode: Target Specular SPP/SPB" << std::endl;
+          break;
+        case 15:
+          std::cout << "View mode: Target Specular SPP/SPB " <<
+            "(theoretical/unclamped)" << std::endl;
           break;
       }
       return true;
@@ -680,11 +727,11 @@ void GIScene::trace( const RayGenCameraData& camera_data )
   m_context->launch( 6, static_cast<unsigned int>(buffer_width), 
       static_cast<unsigned int>(buffer_height));
 #ifdef DEBUG_BUF
-  if (m_view_mode > 3)
+  if (m_view_mode > 7)
   {
     //scale heatmaps
     m_max_heatmap_val = 0;
-    if (m_view_mode == 4 || m_view_mode == 5)
+    if (m_view_mode == 8 || m_view_mode == 9)
     {
       Buffer z_distbuf = m_context["z_dist"]->getBuffer();
       float2* z_dists = reinterpret_cast<float2*>(z_distbuf->map());
@@ -698,7 +745,7 @@ void GIScene::trace( const RayGenCameraData& camera_data )
                 z_dists[i+j*buffer_width].y);
       z_distbuf->unmap();
     }
-    if (m_view_mode == 6)
+    if (m_view_mode == 10)
     {
       Buffer spb_buf = m_context["target_spb"]->getBuffer();
       float* spb_vals = reinterpret_cast<float*>(spb_buf->map());
@@ -712,7 +759,7 @@ void GIScene::trace( const RayGenCameraData& camera_data )
         }
       spb_buf->unmap();
     }
-    if (m_view_mode == 7)
+    if (m_view_mode == 11)
     {
       Buffer spb_buf = m_context["target_spb_theoretical"]->getBuffer();
       float* spb_vals = reinterpret_cast<float*>(spb_buf->map());
@@ -726,9 +773,49 @@ void GIScene::trace( const RayGenCameraData& camera_data )
         }
       spb_buf->unmap();
     }
-    if (m_view_mode == 8)
+    if (m_view_mode == 12)
     {
       m_max_heatmap_val = 0.25f;
+    }
+    if (m_view_mode == 13)
+    {
+      Buffer spec_wvmax_buf = m_context["spec_wvmax"]->getBuffer();
+      float* spec_wvmax_vals = reinterpret_cast<float*>(spec_wvmax_buf->map());
+      for (int i = 0; i < buffer_width; ++i)
+        for (int j = 0; j < buffer_height; ++j)
+        {
+          m_max_heatmap_val = max(m_max_heatmap_val, 
+              min(spec_wvmax_vals[i+j*buffer_width],1000.));
+        }
+      spec_wvmax_buf->unmap();
+    }
+    if (m_view_mode == 14)
+    {
+      Buffer spb_buf = m_context["target_spb_spec"]->getBuffer();
+      float* spb_vals = reinterpret_cast<float*>(spb_buf->map());
+      for(int i = 0; i < buffer_width; ++i)
+        for(int j = 0; j < bucket_buffer_height; ++j)
+        {
+          //reject values that are too large
+          float cur_spb_val = spb_vals[i+j*buffer_width];
+          if (cur_spb_val < 10000.)
+            m_max_heatmap_val = max(m_max_heatmap_val, cur_spb_val);
+        }
+      spb_buf->unmap();
+    }
+    if (m_view_mode == 15)
+    {
+      Buffer spb_buf = m_context["target_spb_spec_theoretical"]->getBuffer();
+      float* spb_vals = reinterpret_cast<float*>(spb_buf->map());
+      for(int i = 0; i < buffer_width; ++i)
+        for(int j = 0; j < bucket_buffer_height; ++j)
+        {
+          //reject values that are too large
+          float cur_spb_val = spb_vals[i+j*buffer_width];
+          if (cur_spb_val < 10000.)
+            m_max_heatmap_val = max(m_max_heatmap_val, cur_spb_val);
+        }
+      spb_buf->unmap();
     }
     m_context["max_heatmap"]->setFloat(m_max_heatmap_val);
     
