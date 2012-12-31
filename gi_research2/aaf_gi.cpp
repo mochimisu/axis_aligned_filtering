@@ -583,11 +583,18 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
       {
         Buffer buffer = m_context["output_buffer"]->getBuffer();
         RTsize buffer_width, buffer_height;
+        buffer->getSize( buffer_width, buffer_height );
         RTsize bucket_buffer_height = buffer_height * num_buckets;
         Buffer spb_buf = m_context["target_spb"]->getBuffer();
         Buffer spb_theo_buf = m_context["target_spb_theoretical"]->getBuffer();
+        Buffer spb_spec_buf = m_context["target_spb_spec"]->getBuffer();
+        Buffer spb_spec_theo_buf = m_context["target_spb_spec_theoretical"]->
+          getBuffer();
         float* spb_vals = reinterpret_cast<float*>(spb_buf->map());
         float* spb_theo_vals = reinterpret_cast<float*>(spb_theo_buf->map());
+        float* spb_spec_vals = reinterpret_cast<float*>(spb_spec_buf->map());
+        float* spb_spec_theo_vals = reinterpret_cast<float*>(
+            spb_spec_theo_buf->map());
         float max_spb = spb_theo_vals[0];
         float min_spb = spb_theo_vals[0];
         float max_clamped_spb = spb_vals[0];
@@ -597,8 +604,14 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
         for(int i = 0; i < buffer_width; ++i)
           for(int j = 0; j < bucket_buffer_height; ++j)
           {
+            float cur_spb_theo_val = max(spb_theo_vals[i+j*buffer_width]
+                +spb_spec_theo_vals[i+j*buffer_width],0);
+            float cur_spb_val = max(spb_vals[i+j*buffer_width]
+                +spb_spec_vals[i+j*buffer_width],0);
+            /*
             float cur_spb_theo_val = max(spb_theo_vals[i+j*buffer_width],0);
             float cur_spb_val = max(spb_vals[i+j*buffer_width],0);
+            */
 
             min_spb = min(min_spb, cur_spb_theo_val);
             max_spb = max(max_spb, cur_spb_theo_val);
@@ -624,10 +637,17 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
             float cur_clamped_spp = 0;
             for(int k = 0; k < num_buckets; ++k)
             {
+              int index = i+(j*num_buckets+k)*buffer_width;
               float cur_spb_theo_val = max(
-                  spb_vals[i+(j*num_buckets+k)*buffer_width],0);
+                  spb_theo_vals[index]+spb_spec_theo_vals[index],0);
               float cur_spb_val = max(
-                  spb_vals[i+(j*num_buckets+k)*buffer_width],0);
+                  spb_vals[index]+spb_spec_vals[index],0);
+              /*
+              float cur_spb_theo_val = max(
+                  spb_theo_vals[index],0);
+              float cur_spb_val = max(
+                  spb_vals[index],0);
+                  */
 
               cur_spp += cur_spb_theo_val;
               cur_clamped_spp += cur_spb_val;
@@ -644,6 +664,8 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
 
         spb_buf->unmap();
         spb_theo_buf->unmap();
+        spb_spec_buf->unmap();
+        spb_spec_theo_buf->unmap();
 
         std::cout << "Buckets:" << std::endl;
         std::cout << "  Average SPB: " << average_clamped_spb << std::endl;

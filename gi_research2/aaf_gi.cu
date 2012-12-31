@@ -408,10 +408,16 @@ RT_PROGRAM void sample_direct_z()
 
   //initialize some buffers
   prefilter_rejected[launch_index] = make_uint2(0,1);
+  for(int bucket = 0; bucket < num_buckets; ++bucket)
+  {
+    uint2 bucket_index = make_uint2(base_bucket_index.x,
+        base_bucket_index.y+bucket);
+    indirect_illum[bucket_index] = make_float3(0);
+    indirect_illum_spec[bucket_index] = make_float3(0);
+  }
 
   PerRayData_direct dir_samp;
   dir_samp.hit = false;
-
   Ray ray = make_Ray(ray_origin, ray_direction, direct_ray_type, 
       scene_epsilon, RT_DEFAULT_MAX);
   rtTrace(top_object, ray, dir_samp);
@@ -467,7 +473,7 @@ RT_PROGRAM void sample_direct_z()
     uint2 bucket_index = make_uint2(base_bucket_index.x,
         base_bucket_index.y+bucket);
     float bucket_zmin_dist = 1000000000000.f;
-    float bucket_zmax_dist = 0.f;
+    float bucket_zmax_dist = scene_epsilon;
     for(int samp = 0; samp < initial_bucket_samples; ++samp)
     {
       float3 sample_dir;
@@ -544,8 +550,13 @@ RT_PROGRAM void sample_indirect()
       launch_index.y/num_buckets);
   uint cur_bucket = launch_index.y%num_buckets;
 
+
   if(!visible[screen_index])
   {
+    target_spb_theoretical[launch_index] = 0;
+    target_spb[launch_index] = 0;
+    target_spb_spec_theoretical[launch_index] = 0;
+    target_spb_spec[launch_index] = 0;
     indirect_illum[launch_index] = make_float3(0);
     return;
   }
@@ -602,6 +613,8 @@ RT_PROGRAM void sample_indirect()
   float3 normal = n[screen_index];
   float3 Kd = Kd_image[screen_index];
 
+  float cur_phong_exp = phong_exp_image[screen_index];
+
   //diffuse
   //sample this hemisphere with cosine (aligned to normal) weighting
   float3 incoming_diff_indirect = make_float3(0);
@@ -615,7 +628,10 @@ RT_PROGRAM void sample_indirect()
     float3 ray_n = normal;
     float3 rn_u, rn_v, rn_w;
     float3 sample_dir;
-    float3 sample_color = make_float3(0);
+    float3 sample_diffuse_color = make_float3(0);
+    float3 sample_specular_color = make_float3(0);
+    float3 prev_dir = normalize(first_hit-eye);
+    float prev_phong_exp = cur_phong_exp;
     for (int depth = 0; depth < indirect_ray_depth; ++depth)
     {
       prd.hit = false;
@@ -634,18 +650,24 @@ RT_PROGRAM void sample_indirect()
       rtTrace(top_object, ray, prd);
       if (!prd.hit)
         break;
-      sample_color += prd.incoming_diffuse_light * prd.Kd 
-        + prd.incoming_specular_light * prd.Ks;
+      float3 R = normalize(2*ray_n*dot(ray_n, sample_dir)-sample_dir);
+      float nDr = max(dot(-prev_dir, R), 0.f);
+      float3 incoming_light = prd.incoming_specular_light * prd.Ks 
+        + prd.incoming_diffuse_light * prd.Kd;
+
+      sample_diffuse_color += incoming_light;
+      sample_specular_color += incoming_light*pow(nDr, prev_phong_exp);
       ray_origin = prd.world_loc;
       ray_n = prd.norm;
+      prev_dir = sample_dir;
+      prev_phong_exp = prd.phong_exp;
     }
-    incoming_diff_indirect += sample_color;
+    incoming_diff_indirect += sample_diffuse_color;
+    incoming_spec_indirect += sample_specular_color;
   }
-  incoming_diff_indirect /= (float)spp_int;
 
   //specular
   //sample this hemisphere with cos^n (aligned to reflected angle) weighting
-  float cur_phong_exp = phong_exp_image[screen_index];
   for (int samp = 0; samp < spp_spec_int; ++samp)
   {
     PerRayData_direct prd;
@@ -655,12 +677,15 @@ RT_PROGRAM void sample_indirect()
     float3 prev_dir = normalize(first_hit-eye);
 
     float3 sample_dir;
+    float3 sample_diffuse_color = make_float3(0);
     float3 sample_specular_color = make_float3(0);
+    float prev_phong_exp = cur_phong_exp;
     for (int depth = 0; depth < indirect_ray_depth; ++depth)
     {
       prd.hit = false;
 
-      float3 perf_refl = prev_dir - 2*ray_n*dot(ray_n, prev_dir);
+      prev_dir = normalize(prev_dir);
+      float3 perf_refl = normalize(prev_dir - 2*ray_n*dot(ray_n, prev_dir));
       createONB(perf_refl, rns_u, rns_v, rns_w);
 
       float2 rand_samp = make_float2(rnd(seed), rnd(seed));
@@ -682,18 +707,31 @@ RT_PROGRAM void sample_indirect()
 
       //move this somewhere else...
       float nDl = max(dot(ray_n,sample_dir),0.f);
-
-      sample_specular_color += (prd.incoming_specular_light * prd.Ks 
-        + prd.incoming_diffuse_light * prd.Kd) * nDl 
-        * 2.f/(cur_phong_exp+1);
+      float3 incoming_light = prd.incoming_specular_light * prd.Ks 
+        + prd.incoming_diffuse_light * prd.Kd;
+      float3 R = normalize(ray_n*2*dot(ray_n, sample_dir)-sample_dir);
+      float nDr = max(dot(-prev_dir,R),0.f);
+      float nDrn = pow(nDr, prev_phong_exp);
+/*
+      if(nDrn > 0.01)
+        sample_diffuse_color += incoming_light * nDl/nDrn
+          * 2.f/(prev_phong_exp+1);
+*/
+      sample_specular_color += incoming_light * nDl 
+        * 2.f/(prev_phong_exp+1);
 
       ray_origin = prd.world_loc;
       ray_n = prd.norm;
       prev_dir = sample_dir;
+      prev_phong_exp = prd.phong_exp;
     }
+    incoming_diff_indirect += sample_diffuse_color;
     incoming_spec_indirect += sample_specular_color;
   }
-  incoming_spec_indirect /= (float)spp_spec_int;
+  //incoming_diff_indirect /= (float)spp_int+spp_spec_int;
+  incoming_spec_indirect /= (float)spp_int+spp_spec_int;
+  incoming_diff_indirect /= (float)spp_int;
+  //incoming_spec_indirect /= (float)spp_int;
   
   indirect_illum[launch_index] = incoming_diff_indirect;
   indirect_illum_spec[launch_index] = incoming_spec_indirect;
@@ -1175,7 +1213,8 @@ RT_PROGRAM void sample_indirect_gt()
 
   //ignore buckets, and place all results in the first bucket multiplied
   //by number of buckets used in non-gt code so we can use the same code
-  float3 incoming_indirect = make_float3(0);
+  float3 incoming_indirect_diffuse = make_float3(0);
+  float3 incoming_indirect_specular = make_float3(0);
   unsigned int seed = tea<16>(out_buf.x*launch_index.y+launch_index.x,
       frame_number); //TODO :verify
   for(int samp = 0; samp < samp_this_pass; ++samp)
@@ -1187,7 +1226,10 @@ RT_PROGRAM void sample_indirect_gt()
     float3 ray_n = normal;
     float3 rn_u, rn_v, rn_w;
     float3 sample_dir;
-    float3 sample_color = make_float3(0);
+    float3 incoming_diffuse = make_float3(0);
+    float3 incoming_specular = make_float3(0);
+    float3 prev_dir = normalize(first_hit-eye);
+    float prev_phong_exp = phong_exp_image[screen_index];
     for (int depth = 0; depth < indirect_ray_depth; ++depth)
     {
       prd.hit = false;
@@ -1206,15 +1248,25 @@ RT_PROGRAM void sample_indirect_gt()
       rtTrace(top_object, ray, prd);
       if (!prd.hit)
         break;
-      sample_color += prd.incoming_diffuse_light * prd.Kd;
+      float3 R = normalize(ray_n*2*dot(ray_n, sample_dir)-sample_dir);
+      float nDr = max(dot(-prev_dir,R),0.f);
+      float3 incoming_light = prd.incoming_diffuse_light * prd.Kd
+        + prd.incoming_specular_light * prd.Ks;
+      incoming_diffuse += incoming_light;
+      incoming_specular += incoming_light * pow(nDr, prev_phong_exp);
       ray_origin = prd.world_loc;
       ray_n = prd.norm;
+      prev_dir = sample_dir;
+      prev_phong_exp = prd.phong_exp;
     }
-    incoming_indirect += sample_color;
+    incoming_indirect_diffuse += incoming_diffuse;
+    incoming_indirect_specular += incoming_specular;
 
   }
 
-  indirect_illum[bucket_index] += incoming_indirect/total_gt_samples
-    *num_buckets;
+  indirect_illum[bucket_index] += incoming_indirect_diffuse
+    /total_gt_samples*num_buckets;
+  indirect_illum_spec[bucket_index] += incoming_indirect_specular
+    /total_gt_samples*num_buckets;
 
 }
