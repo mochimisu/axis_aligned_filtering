@@ -115,7 +115,8 @@ rtDeclareVariable(uint,  direct_ray_type, , );
 rtDeclareVariable(uint,  num_buckets, , );
 rtDeclareVariable(int,  z_filter_radius, , );
 rtDeclareVariable(float,  vfov, , );
-rtDeclareVariable(uint, max_spb_pass, , );
+rtDeclareVariable(uint, max_diffuse_spb_pass, , );
+rtDeclareVariable(uint, max_specular_spb_pass, , );
 rtDeclareVariable(uint, indirect_ray_depth, , );
 rtDeclareVariable(int, pixel_radius, , );
 rtDeclareVariable(uint, use_textures, , );
@@ -594,9 +595,9 @@ RT_PROGRAM void sample_indirect()
 
   spp = max(
       min(spp / (1.f-(float)pf_rej.x/pf_rej.y), 
-        (float)max_spb_pass),
+        (float)max_diffuse_spb_pass),
       1.f);
-  spec_spp = max( min(spp, (float)max_spb_pass), 1.f); 
+  spec_spp = max( min(spp, (float)max_specular_spb_pass), 1.f); 
   //TODO: distribute samples according to kd to ks ratio, account for prefilt
 
   float spp_sqrt = sqrt(spp);
@@ -632,6 +633,8 @@ RT_PROGRAM void sample_indirect()
     float3 sample_specular_color = make_float3(0);
     float3 prev_dir = normalize(first_hit-eye);
     float prev_phong_exp = cur_phong_exp;
+    float3 prev_Kd;
+    float3 prev_Ks;
     for (int depth = 0; depth < indirect_ray_depth; ++depth)
     {
       prd.hit = false;
@@ -657,10 +660,17 @@ RT_PROGRAM void sample_indirect()
 
       sample_diffuse_color += incoming_light;
       sample_specular_color += incoming_light*pow(nDr, prev_phong_exp);
+      if (depth > 0)
+      {
+        sample_diffuse_color *= prev_Kd;
+        sample_specular_color *= prev_Ks;
+      }
       ray_origin = prd.world_loc;
       ray_n = prd.norm;
       prev_dir = sample_dir;
       prev_phong_exp = prd.phong_exp;
+      prev_Kd = prd.Kd;
+      prev_Ks = prd.Ks;
     }
     incoming_diff_indirect += sample_diffuse_color;
     incoming_spec_indirect += sample_specular_color;
@@ -680,6 +690,8 @@ RT_PROGRAM void sample_indirect()
     float3 sample_diffuse_color = make_float3(0);
     float3 sample_specular_color = make_float3(0);
     float prev_phong_exp = cur_phong_exp;
+    float3 prev_Kd;
+    float3 prev_Ks;
     for (int depth = 0; depth < indirect_ray_depth; ++depth)
     {
       prd.hit = false;
@@ -719,11 +731,18 @@ RT_PROGRAM void sample_indirect()
 */
       sample_specular_color += incoming_light * nDl 
         * 2.f/(prev_phong_exp+1);
+      if (depth > 0)
+      {
+        sample_diffuse_color *= prev_Kd;
+        sample_specular_color *= prev_Ks;
+      }
 
       ray_origin = prd.world_loc;
       ray_n = prd.norm;
       prev_dir = sample_dir;
       prev_phong_exp = prd.phong_exp;
+      prev_Kd = prd.Kd;
+      prev_Ks = prd.Ks;
     }
     incoming_diff_indirect += sample_diffuse_color;
     incoming_spec_indirect += sample_specular_color;
@@ -1229,6 +1248,8 @@ RT_PROGRAM void sample_indirect_gt()
     float3 incoming_diffuse = make_float3(0);
     float3 incoming_specular = make_float3(0);
     float3 prev_dir = normalize(first_hit-eye);
+    float3 prev_Kd;
+    float3 prev_Ks;
     float prev_phong_exp = phong_exp_image[screen_index];
     for (int depth = 0; depth < indirect_ray_depth; ++depth)
     {
@@ -1254,10 +1275,17 @@ RT_PROGRAM void sample_indirect_gt()
         + prd.incoming_specular_light * prd.Ks;
       incoming_diffuse += incoming_light;
       incoming_specular += incoming_light * pow(nDr, prev_phong_exp);
+      if (depth > 0)
+      {
+        incoming_diffuse *= prev_Kd;
+        incoming_specular *= prev_Ks;
+      }
       ray_origin = prd.world_loc;
       ray_n = prd.norm;
       prev_dir = sample_dir;
       prev_phong_exp = prd.phong_exp;
+      prev_Kd = prd.Kd;
+      prev_Ks = prd.Ks;
     }
     incoming_indirect_diffuse += incoming_diffuse;
     incoming_indirect_specular += incoming_specular;

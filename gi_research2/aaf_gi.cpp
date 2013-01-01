@@ -21,8 +21,9 @@
 #define NUM_BUCKETS 1
 
 //number of maximum samples per pixel
-//#define MAX_SPP 100
-#define MAX_SPP 25
+//#define MAX_DIFFUSE_SPP 100
+#define MAX_DIFFUSE_SPP 50
+#define MAX_SPECULAR_SPP 25
 
 //depth of indirect bounces
 #define INDIRECT_BOUNCES 1
@@ -144,7 +145,8 @@ private:
   unsigned int m_view_mode;
   unsigned int m_first_pass_spb_sqrt;
   unsigned int m_brute_spb;
-  unsigned int m_max_spb_pass;
+  unsigned int m_max_diffuse_spb_pass;
+  unsigned int m_max_specular_spb_pass;
   unsigned int m_use_textures;
 
   float m_max_heatmap_val;
@@ -350,10 +352,12 @@ void GIScene::initScene( InitialCameraData& camera_data )
   //SPP Settings
   m_first_pass_spb_sqrt = 2;
   m_brute_spb = 1000;
-  m_max_spb_pass = MAX_SPP/num_buckets;
+  m_max_diffuse_spb_pass = MAX_DIFFUSE_SPP/num_buckets;
+  m_max_specular_spb_pass = MAX_SPECULAR_SPP/num_buckets;
   m_context["first_pass_spb_sqrt"]->setUint(m_first_pass_spb_sqrt);
   m_context["brute_spb"]->setUint(m_brute_spb);
-  m_context["max_spb_pass"]->setUint(m_max_spb_pass);
+  m_context["max_diffuse_spb_pass"]->setUint(m_max_diffuse_spb_pass);
+  m_context["max_specular_spb_pass"]->setUint(m_max_specular_spb_pass);
   m_context["num_buckets"]->setUint(num_buckets);
   m_context["z_filter_radius"]->setInt(2);
   m_context["indirect_ray_depth"]->setUint(INDIRECT_BOUNCES);
@@ -390,9 +394,10 @@ void GIScene::initScene( InitialCameraData& camera_data )
 
 #ifdef GROUNDTRUTH
   m_context["total_gt_samples_sqrt"]->setUint(GT_SAMPLES_SQRT);
-  m_context["gt_samples_per_pass"]->setUint(MAX_SPP);
+  m_context["gt_samples_per_pass"]->setUint(MAX_SPP+MAX_SPECULAR_SPP);
   m_context["gt_pass"]->setUint(0);
-  int num_passes = (uint)ceil((float)GT_SAMPLES_SQRT*GT_SAMPLES_SQRT/MAX_SPP);
+  int num_passes = (uint)ceil((float)GT_SAMPLES_SQRT*GT_SAMPLES_SQRT
+      /(MAX_DIFFUSE_SPP+MAX_SPECULAR_SPP);
   m_context["gt_total_pass"]->setUint(num_passes);
   m_gt_total_pass = num_passes;
   std::cout << "GT with " << num_passes << " passes" << std::endl;
