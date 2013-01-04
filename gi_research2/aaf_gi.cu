@@ -119,6 +119,7 @@ rtDeclareVariable(uint, max_spb_pass, , );
 rtDeclareVariable(uint, indirect_ray_depth, , );
 rtDeclareVariable(int, pixel_radius, , );
 rtDeclareVariable(uint, use_textures, , );
+rtDeclareVariable(float, spp_mu, , );
 
 rtDeclareVariable(uint, view_mode, , );
 rtDeclareVariable(uint, view_bucket, , );
@@ -205,7 +206,7 @@ __device__ __inline__ void sampleUnitHemispherePower( const optix::float2& sampl
 //wxf= 1/b
 __device__ __inline__ float gaussFilter(float distsq, float wxf)
 {
-  float sample = distsq*wxf*wxf;
+  float sample = distsq*wxf*wxf*spp_mu*spp_mu;
   if (sample > 0.9999) {
     return 0.0;
   }
@@ -222,10 +223,11 @@ __device__ __inline__ bool indirectFilterThresholds(
     const size_t2& buf_size,
     unsigned int bucket)
 {
-  const float z_threshold = .1f;
-  const float dist_threshold = 100.f;
-  const float angle_threshold = 10.f * M_PI/180.f;
-  const float dist_threshold_sq = dist_threshold * dist_threshold;
+  const float z_threshold = .7f;
+  //const float dist_threshold = 100.f;
+  const float angle_threshold = 5.f * M_PI/180.f;
+  //const float dist_threshold_sq = dist_threshold * dist_threshold;
+  const float dist_threshold_sq = cur_zpmin*cur_zpmin;
 
 
 
@@ -560,6 +562,10 @@ RT_PROGRAM void sample_indirect()
     indirect_illum[launch_index] = make_float3(0);
     return;
   }
+
+  float3 Kd = Kd_image[screen_index];
+  float3 Ks = Ks_image[screen_index];
+  float cur_phong_exp = phong_exp_image[screen_index];
   
   //calculate SPP
   float2 cur_zd = z_dist[launch_index]; //x: zmin, y:zmax
@@ -591,12 +597,19 @@ RT_PROGRAM void sample_indirect()
   target_spb_spec_theoretical[launch_index] = spec_spp;
 
   uint2 pf_rej = prefilter_rejected[launch_index];
+  
+  float rej_scale = (1.f + (float)pf_rej.x/pf_rej.y);
+
+  float Kd_mag = length(Kd);
+  float Ks_mag = length(Ks);
+  float Kd_Ks_ratio = Kd_mag/(Kd_mag+Ks_mag);
 
   spp = max(
       min(spp / (1.f-(float)pf_rej.x/pf_rej.y), 
-        (float)max_spb_pass),
-      1.f);
-  spec_spp = max( min(spp, (float)max_spb_pass), 1.f); 
+        spp_mu*(float)max_spb_pass),
+      1.f) * Kd_Ks_ratio;
+  spec_spp = max( min(spp, spp_mu*(float)max_spb_pass), 1.f)
+    *(1-Kd_Ks_ratio); 
   //TODO: distribute samples according to kd to ks ratio, account for prefilt
 
   float spp_sqrt = sqrt(spp);
@@ -611,9 +624,6 @@ RT_PROGRAM void sample_indirect()
 
   float3 first_hit = world_loc[screen_index];
   float3 normal = n[screen_index];
-  float3 Kd = Kd_image[screen_index];
-
-  float cur_phong_exp = phong_exp_image[screen_index];
 
   //diffuse
   //sample this hemisphere with cosine (aligned to normal) weighting
@@ -779,6 +789,8 @@ RT_PROGRAM void indirect_filter_first_pass()
 }
 RT_PROGRAM void indirect_filter_second_pass()
 {
+  
+  size_t2 screen_size = output_buffer.size();
   uint2 screen_index = make_uint2(launch_index.x,
       launch_index.y/num_buckets);
   uint cur_bucket = launch_index.y%num_buckets;
@@ -796,9 +808,13 @@ RT_PROGRAM void indirect_filter_second_pass()
 
   float3 cur_world_loc = world_loc[screen_index];
   float3 cur_n = n[screen_index];
-
+  
+  float proj_dist = 2./screen_size.y * depth[screen_index] 
+    * tan(vfov/2.*M_PI/180.);
+  int radius = min(10.f,max(1.f,cur_zmin/proj_dist));
+  
   if (visible[screen_index])
-    for (int i = -pixel_radius; i < pixel_radius; ++i)
+    for (int i = -radius; i < radius; ++i)
     {
       uint2 target_index = make_uint2(screen_index.x, screen_index.y+i);
       indirectFilter(blurred_indirect_sum, sum_weight,
@@ -821,6 +837,8 @@ RT_PROGRAM void indirect_filter_second_pass()
 }
 RT_PROGRAM void indirect_prefilter_first_pass()
 {
+  
+  size_t2 screen_size = output_buffer.size();
   uint2 screen_index = make_uint2(launch_index.x,
       launch_index.y/num_buckets);
   uint cur_bucket = launch_index.y%num_buckets;
@@ -833,8 +851,12 @@ RT_PROGRAM void indirect_prefilter_first_pass()
 
   uint2 cur_prefilter_rej = make_uint2(0,0);
 
+  float proj_dist = 2./screen_size.y * depth[screen_index] 
+    * tan(vfov/2.*M_PI/180.);
+  int radius = min(10.f,max(1.f,cur_zmin/proj_dist));
+
   if (visible[screen_index])
-    for (int i = -pixel_radius; i < pixel_radius; ++i)
+    for (int i = -radius; i < radius; ++i)
     {
       //TODO: cleanup
       uint2 target_index = make_uint2(screen_index.x, screen_index.y+i);

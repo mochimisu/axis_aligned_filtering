@@ -1012,6 +1012,7 @@ void GIScene::createSceneSibenik(InitialCameraData& camera_data)
   
   m_context["top_object"]->set( conference_geom_group );
   m_context["top_shadower"]->set( conference_geom_group );
+  m_context["spp_mu"]->setFloat(0.7f);
 }
 
 
@@ -1168,6 +1169,7 @@ void GIScene::createSceneCornell(InitialCameraData& camera_data)
   geometry_group->setAcceleration( m_context->createAcceleration("Bvh","Bvh"));
   m_context["top_object"]->set( geometry_group );
   m_context["vfov"]->setFloat( vfov );
+  m_context["spp_mu"]->setFloat(1.f);
 }
 
 
@@ -1330,6 +1332,7 @@ void GIScene::createSceneCornell2(InitialCameraData& camera_data)
   m_context["vfov"]->setFloat( vfov );
   m_context["top_object"]->set( geom_group );
   m_context["top_shadower"]->set( geom_group );
+  m_context["spp_mu"]->setFloat(1.f);
 }
 
 
@@ -1387,6 +1390,7 @@ void GIScene::createSceneSponza(InitialCameraData& camera_data)
 
   // Declare these so validation will pass
   m_context["vfov"]->setFloat( vfov );
+  m_context["spp_mu"]->setFloat(.8f);
 
   
   m_context["top_object"]->set( conference_geom_group );
@@ -1447,6 +1451,7 @@ void GIScene::createSceneConference(InitialCameraData& camera_data)
   
   m_context["top_object"]->set( conference_geom_group );
   m_context["top_shadower"]->set( conference_geom_group );
+  m_context["spp_mu"]->setFloat(.8f);
 }
 
 void GIScene::createSceneCornell3(InitialCameraData& camera_data)
@@ -1501,6 +1506,7 @@ void GIScene::createSceneCornell3(InitialCameraData& camera_data)
   
   m_context["top_object"]->set( conference_geom_group );
   m_context["top_shadower"]->set( conference_geom_group );
+  m_context["spp_mu"]->setFloat(1.f);
 }
 
 //-----------------------------------------------------------------------------
