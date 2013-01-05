@@ -84,7 +84,6 @@ struct PerRayData_direct
   float3 incoming_diffuse_light;
   float3 norm;
   float3 Kd;
-  float phong_exp;
   float z_dist;
   bool hit;
 };
@@ -93,15 +92,15 @@ rtBuffer<float3, 2>               indirect_illum;
 rtBuffer<float3, 2>               indirect_illum_filter1d;
 
 rtBuffer<float3, 2>               Kd_image;
-rtBuffer<float, 2>                phong_exp_image;
 rtBuffer<float2, 2>               z_dist;
 rtBuffer<float2, 2>               z_dist_filter1d;
 rtBuffer<float3, 2>               world_loc;
 rtBuffer<float3, 2>               n;
 rtBuffer<float, 2>                depth;
+rtBuffer<float, 2>                target_spb_theoretical;
+rtBuffer<float, 2>                target_spb;
 rtBuffer<char, 2>                 visible;
 rtDeclareVariable(float3,   Kd, , );
-rtDeclareVariable(float,   phong_exp, , );
 rtDeclareVariable(uint,  direct_ray_type, , );
 rtDeclareVariable(int,  z_filter_radius, , );
 rtDeclareVariable(float,  vfov, , );
@@ -114,9 +113,6 @@ rtDeclareVariable(float, imp_samp_scale_diffuse, ,);
 
 rtDeclareVariable(uint, view_mode, , );
 rtDeclareVariable(float, max_heatmap, , );
-
-rtBuffer<float, 2>                 target_spb_theoretical;
-rtBuffer<float, 2>                 target_spb;
 
 rtDeclareVariable(float3, texcoord, attribute texcoord, ); 
 rtTextureSampler<float4, 2>   diffuse_map;  
@@ -230,6 +226,7 @@ __device__ __inline__ void indirectFilter(
 
     float diff_weight = filterWeight(proj_distsq, target_n, cur_n, cur_zpmin);
 
+
     float3 target_indirect = indirect_illum[target_index];
     if (pass == 1)
     {
@@ -266,7 +263,6 @@ RT_PROGRAM void closest_hit_direct()
   }
 
   prd_direct.Kd = cur_Kd;
-  prd_direct.phong_exp = phong_exp;
 
   //lights
   unsigned int num_lights = lights.size();
@@ -322,7 +318,7 @@ RT_PROGRAM void sample_direct_z()
   //initialize some buffers
   prefilter_rejected[launch_index] = make_uint2(0,1);
 
-    indirect_illum[launch_index] = make_float3(0);
+  indirect_illum[launch_index] = make_float3(0);
 
   PerRayData_direct dir_samp;
   dir_samp.hit = false;
@@ -358,9 +354,10 @@ RT_PROGRAM void sample_direct_z()
 
   float bucket_zmin_dist = 1000000000000.f;
   float bucket_zmax_dist = scene_epsilon;
+  PerRayData_direct indir_samp;
+  float3 sample_dir;
   for(int samp = 0; samp < initial_bucket_samples; ++samp)
   {
-	  float3 sample_dir;
 	  float2 rand_samp = make_float2(rnd(seed),rnd(seed));
 	  //stratify x,y
 	  rand_samp.x = (samp%initial_bucket_samples_sqrt + rand_samp.x)
@@ -372,7 +369,6 @@ RT_PROGRAM void sample_direct_z()
 	  rand_samp.y *= 0.95f;
 	  sampleUnitHemisphere(rand_samp, n_u, n_v, n_w, sample_dir);
 
-	  PerRayData_direct indir_samp;
 	  indir_samp.hit = false;
 	  Ray indir_ray = make_Ray(dir_samp.world_loc, sample_dir,
 		  direct_ray_type, scene_epsilon, RT_DEFAULT_MAX);
@@ -429,14 +425,11 @@ RT_PROGRAM void sample_indirect()
 
   if(!visible[launch_index])
   {
-    target_spb_theoretical[launch_index] = 0;
-    target_spb[launch_index] = 0;
     indirect_illum[launch_index] = make_float3(0);
     return;
   }
 
   float3 Kd = Kd_image[launch_index];
-  float cur_phong_exp = phong_exp_image[launch_index];
   
   //calculate SPP
   float2 cur_zd = z_dist[launch_index]; //x: zmin, y:zmax
@@ -451,6 +444,7 @@ RT_PROGRAM void sample_indirect()
   float spp = imp_samp_scale_diffuse
 	*spp_term1*spp_term1 * diff_wvmax*diff_wvmax 
     * spp_term2*spp_term2;
+  target_spb_theoretical[launch_index] = spp;
 
 
   uint2 pf_rej = prefilter_rejected[launch_index];
@@ -466,7 +460,7 @@ RT_PROGRAM void sample_indirect()
   float spp_sqrt = sqrt(spp);
   int spp_sqrt_int = (int) ceil(spp_sqrt);
   int spp_int = spp_sqrt_int * spp_sqrt_int;
-  target_spb[launch_index] = spp_int;
+  target_spb[launch_index] = (float)spp_int;
 
   float3 first_hit = world_loc[launch_index];
   float3 normal = n[launch_index];
@@ -477,22 +471,34 @@ RT_PROGRAM void sample_indirect()
   size_t2 screen = direct_illum.size();
   unsigned int seed = tea<16>(screen.x*launch_index.y+launch_index.x,
       frame_number); //TODO :verify
+  float3 rn_u, rn_v, rn_w;
+  float3 sample_dir;
+  float3 ray_origin;
+  float3 ray_n;
+  float3 sample_diffuse_color;
+  float3 prev_dir;
+  float3 prev_Kd;
+
+  float2 rand_samp;
+  float3 R;
+  float nDr;
+  float3 incoming_light;
+
+  int depth;
+
   for (int samp = 0; samp < spp_int; ++samp)
   {
     PerRayData_direct prd;
-    float3 ray_origin = first_hit;
-    float3 ray_n = normal;
-    float3 rn_u, rn_v, rn_w;
-    float3 sample_dir;
-    float3 sample_diffuse_color = make_float3(0);
-    float3 prev_dir = normalize(first_hit-eye);
-	float3 prev_Kd = make_float3(1.f);
-    float prev_phong_exp = cur_phong_exp;
-    for (int depth = 0; depth < indirect_ray_depth; ++depth)
+    ray_origin = first_hit;
+    ray_n = normal;
+    sample_diffuse_color = make_float3(0);
+    prev_dir = normalize(first_hit-eye);
+	prev_Kd = make_float3(1.f);
+    for (depth = 0; depth < indirect_ray_depth; ++depth)
     {
       prd.hit = false;
       createONB(ray_n, rn_u, rn_v, rn_w);
-      float2 rand_samp = make_float2(rnd(seed), rnd(seed));
+      rand_samp = make_float2(rnd(seed), rnd(seed));
       //stratify x,y
       rand_samp.x = (samp%spp_sqrt_int + rand_samp.x)/spp_sqrt_int;
       rand_samp.y = (((int)samp/spp_sqrt_int) + rand_samp.y)/spp_sqrt_int;
@@ -504,22 +510,20 @@ RT_PROGRAM void sample_indirect()
       rtTrace(top_object, ray, prd);
       if (!prd.hit)
         break;
-      float3 R = normalize(2*ray_n*dot(ray_n, sample_dir)-sample_dir);
-      float nDr = max(dot(-prev_dir, R), 0.f);
-      float3 incoming_light = prd.incoming_diffuse_light * prd.Kd;
+      R = normalize(2*ray_n*dot(ray_n, sample_dir)-sample_dir);
+      nDr = max(dot(-prev_dir, R), 0.f);
+      incoming_light = prd.incoming_diffuse_light * prd.Kd;
 
       sample_diffuse_color += incoming_light * prev_Kd;
       ray_origin = prd.world_loc;
       ray_n = prd.norm;
       prev_dir = sample_dir;
-      prev_phong_exp = prd.phong_exp;
 	  prev_Kd = prd.Kd;
     }
     incoming_diff_indirect += sample_diffuse_color;
   }
 
   incoming_diff_indirect /= (float)spp_int;
-  //incoming_spec_indirect /= (float)spp_int;
   
   indirect_illum[launch_index] = incoming_diff_indirect;
 
@@ -564,7 +568,6 @@ RT_PROGRAM void indirect_filter_second_pass()
   float proj_dist = 2./screen_size.y * depth[launch_index] 
     * tan(vfov/2.*M_PI/180.);
   int radius = min(10.f,max(1.f,cur_zmin/proj_dist));
-  radius = 10;
   
   if (visible[launch_index])
     for (int i = -radius; i < radius; ++i)
@@ -596,7 +599,6 @@ RT_PROGRAM void indirect_prefilter_first_pass()
   float proj_dist = 2./screen_size.y * depth[launch_index] 
     * tan(vfov/2.*M_PI/180.);
   int radius = min(10.f,max(1.f,cur_zmin/proj_dist));
-  radius = 10;
 
   if (visible[launch_index])
     for (int i = -radius; i < radius; ++i)
@@ -616,12 +618,8 @@ RT_PROGRAM void indirect_prefilter_first_pass()
         float proj_distsq = euclidean_distsq - rDn*rDn;
         float3 target_n = n[target_index];
 
-        float weight = filterWeight(proj_distsq, target_n, cur_n, cur_zmin);
-        if (weight > 0.01)
-        {
-          cur_prefilter_rej.x += (!can_filter);
-          cur_prefilter_rej.y += 1;
-        }
+		cur_prefilter_rej.x += (!can_filter);
+		cur_prefilter_rej.y += 1;
       }
     }
   prefilter_rejected_filter1d[launch_index] = cur_prefilter_rej;
@@ -656,15 +654,11 @@ RT_PROGRAM void indirect_prefilter_second_pass()
         float proj_distsq = euclidean_distsq - rDn*rDn;
         float3 target_n = n[target_index];
 
-        float weight = filterWeight(proj_distsq, target_n, cur_n, cur_zmin);
-        if (weight > 0.01)
-        {
-          uint2 firstpass_pf_rej = 
-            prefilter_rejected_filter1d[target_index];
-          if (!can_filter)
-            cur_prefilter_rej.x += firstpass_pf_rej.x;
-          cur_prefilter_rej.y += firstpass_pf_rej.y;
-        }
+		uint2 firstpass_pf_rej = 
+			prefilter_rejected_filter1d[target_index];
+		if (!can_filter)
+			cur_prefilter_rej.x += firstpass_pf_rej.x;
+		cur_prefilter_rej.y += firstpass_pf_rej.y;
       }
     }
   prefilter_rejected[launch_index] = cur_prefilter_rej;
@@ -677,7 +671,8 @@ RT_PROGRAM void display()
   float3 indirect_illum_full = indirect_illum_combined * Kd_image[launch_index];
   output_buffer[launch_index] = make_float4(
       direct_illum[launch_index] 
-      + indirect_illum_full,1);	  /*
+      + indirect_illum_full,1);
+	  /*
 	  //other view modes
 	  if (view_mode)
 	  {
@@ -756,7 +751,6 @@ RT_PROGRAM void sample_indirect_gt()
     float3 sample_dir;
     float3 incoming_diffuse = make_float3(0);
     float3 prev_dir = normalize(first_hit-eye);
-    float prev_phong_exp = phong_exp_image[launch_index];
     for (int depth = 0; depth < indirect_ray_depth; ++depth)
     {
       prd.hit = false;
@@ -782,7 +776,6 @@ RT_PROGRAM void sample_indirect_gt()
       ray_origin = prd.world_loc;
       ray_n = prd.norm;
       prev_dir = sample_dir;
-      prev_phong_exp = prd.phong_exp;
     }
     incoming_indirect_diffuse += incoming_diffuse;
 

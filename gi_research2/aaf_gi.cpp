@@ -7,7 +7,7 @@
 //=== Configuration
 
 // Enable debug buffers (for stats and additional views)
-//#define DEBUG_BUF
+#define DEBUG_BUF
 
 // Choose scene:
 // 0: Cornell box
@@ -164,16 +164,13 @@ int output_num = 0;
 
 void GIScene::initScene( InitialCameraData& camera_data )
 {
-  m_context->setRayTypeCount( 5 );
+  m_context->setRayTypeCount( 3 );
   m_context->setEntryPointCount( 7 );
   m_context->setStackSize( 1800 );
 
   m_context["scene_epsilon"]->setFloat( 0.01f );
   m_context["max_depth"]->setUint(m_max_depth);
   m_context["pathtrace_shadow_ray_type"]->setUint(1u);
-  m_context["pathtrace_bsdf_shadow_ray_type"]->setUint(2u);
-  m_context["rr_begin_depth"]->setUint(m_rr_begin_depth);
-
 
   // Setup output buffer
   Variable output_buffer = m_context["output_buffer"];
@@ -195,10 +192,6 @@ void GIScene::initScene( InitialCameraData& camera_data )
         "miss" ) );
 
   m_context["frame_number"]->setUint(1);
-
-   // Index of sampling_stategy (BSDF, light, MIS)
-  m_sampling_strategy = 0;
-  m_context["sampling_stategy"]->setInt(m_sampling_strategy);
 
   // AAF programs
   Program direct_z_sample_prog = m_context->createProgramFromPTXFile(
@@ -229,8 +222,7 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context->setRayGenerationProgram( 5, ind_prefilt_first_prog );
   m_context->setRayGenerationProgram( 6, ind_prefilt_second_prog );
 
-  m_context["direct_ray_type"]->setUint(3u);
-  m_context["indirect_ray_type"]->setUint(4u);
+  m_context["direct_ray_type"]->setUint(2u);
 
 
   //AAF GI Buffers
@@ -243,8 +235,7 @@ void GIScene::initScene( InitialCameraData& camera_data )
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT3, m_width, m_height));
 
-  //Indirect Illumination Buffer (Unaveraged RGB, and number of samples is
-  // stored in A)
+  //Indirect Illumination Buffer
   m_context["indirect_illum"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT3, m_width, m_height));
@@ -253,12 +244,6 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context["Kd_image"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT3, m_width, m_height));
-  m_context["Ks_image"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
-        RT_FORMAT_FLOAT3, m_width, m_height));
-  m_context["phong_exp_image"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
-        RT_FORMAT_FLOAT, m_width, m_height));
 
   //Target SPP
   m_context["target_indirect_spp"]->set(
@@ -288,7 +273,13 @@ void GIScene::initScene( InitialCameraData& camera_data )
   //Depth buffer
   m_context["depth"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
-        RT_FORMAT_FLOAT, m_width, m_height));
+        RT_FORMAT_FLOAT, m_width, m_height));
+  m_context["target_spb"]->set(
+	  m_context->createBuffer(RT_BUFFER_OUTPUT | debug_buf_type,
+	  RT_FORMAT_FLOAT, m_width, m_height));
+  m_context["target_spb_theoretical"]->set(
+	  m_context->createBuffer(RT_BUFFER_OUTPUT | debug_buf_type,
+	  RT_FORMAT_FLOAT, m_width, m_height));
 
   //Intermediate buffers to keep between passes
   m_context["z_dist_filter1d"]->set(
@@ -297,14 +288,6 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context["indirect_illum_filter1d"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT3, m_width, m_height));
-
-  //spp buffer
-  m_context["target_spb"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
-        RT_FORMAT_FLOAT, m_width, m_height));
-  m_context["target_spb_theoretical"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
-        RT_FORMAT_FLOAT, m_width, m_height));
 
   //prefiltering buffers
   m_context["prefilter_rejected"]->set(
@@ -547,14 +530,8 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
         buffer->getSize( buffer_width, buffer_height );
         Buffer spb_buf = m_context["target_spb"]->getBuffer();
         Buffer spb_theo_buf = m_context["target_spb_theoretical"]->getBuffer();
-        Buffer spb_spec_buf = m_context["target_spb_spec"]->getBuffer();
-        Buffer spb_spec_theo_buf = m_context["target_spb_spec_theoretical"]->
-          getBuffer();
         float* spb_vals = reinterpret_cast<float*>(spb_buf->map());
         float* spb_theo_vals = reinterpret_cast<float*>(spb_theo_buf->map());
-        float* spb_spec_vals = reinterpret_cast<float*>(spb_spec_buf->map());
-        float* spb_spec_theo_vals = reinterpret_cast<float*>(
-            spb_spec_theo_buf->map());
         float max_spb = spb_theo_vals[0];
         float min_spb = spb_theo_vals[0];
         float max_clamped_spb = spb_vals[0];
@@ -565,9 +542,9 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
           for(int j = 0; j < buffer_height; ++j)
           {
             float cur_spb_theo_val = max(spb_theo_vals[i+j*buffer_width]
-                +spb_spec_theo_vals[i+j*buffer_width],0);
+                ,0);
             float cur_spb_val = max(spb_vals[i+j*buffer_width]
-                +spb_spec_vals[i+j*buffer_width],0);
+                ,0);
             /*
             float cur_spb_theo_val = max(spb_theo_vals[i+j*buffer_width],0);
             float cur_spb_val = max(spb_vals[i+j*buffer_width],0);
@@ -587,8 +564,6 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
 
         spb_buf->unmap();
         spb_theo_buf->unmap();
-        spb_spec_buf->unmap();
-        spb_spec_theo_buf->unmap();
 
         std::cout << "Pixels:" << std::endl;
         std::cout << "  Average SPB: " << average_clamped_spb << std::endl;
@@ -636,22 +611,18 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 
   m_context->launch( 0, static_cast<unsigned int>(buffer_width), 
       static_cast<unsigned int>(buffer_height));
-  if (m_prefilter_indirect)
-  {
+#if 1
     m_context->launch( 5, static_cast<unsigned int>(buffer_width), 
         static_cast<unsigned int>(buffer_height));
     m_context->launch( 6, static_cast<unsigned int>(buffer_width),
         static_cast<unsigned int>(buffer_height));
-  }
+#endif
   m_context->launch( 1, static_cast<unsigned int>(buffer_width),
       static_cast<unsigned int>(buffer_height));
-  if (m_filter_indirect)
-  {
     m_context->launch( 2, static_cast<unsigned int>(buffer_width), 
         static_cast<unsigned int>(buffer_height));
     m_context->launch( 3, static_cast<unsigned int>(buffer_width), 
         static_cast<unsigned int>(buffer_height));
-  }
   m_context->launch( 4, static_cast<unsigned int>(buffer_width), 
       static_cast<unsigned int>(buffer_height));
 
@@ -799,7 +770,7 @@ void GIScene::createSceneSibenik(InitialCameraData& camera_data)
         "aaf_gi.cu" ), "shadow" );
   Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
         "aaf_gi.cu" ), "closest_hit_direct" );
-  diffuse->setClosestHitProgram( 3, diffuse_p );
+  diffuse->setClosestHitProgram( 2, diffuse_p );
   diffuse->setAnyHitProgram( 1, diffuse_ah );
 
   diffuse["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
@@ -859,7 +830,7 @@ void GIScene::createSceneCornell(InitialCameraData& camera_data)
         "aaf_gi.cu" ), "shadow" );
   Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
         "aaf_gi.cu" ), "closest_hit_direct" );
-  diffuse->setClosestHitProgram( 3, diffuse_p );
+  diffuse->setClosestHitProgram( 2, diffuse_p );
   diffuse->setAnyHitProgram( 1, diffuse_ah );
   
   //dummy texture maps
@@ -1018,9 +989,9 @@ void GIScene::createSceneCornell2(InitialCameraData& camera_data)
         "aaf_gi.cu" ), "shadow" );
   Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
         "aaf_gi.cu" ), "closest_hit_direct" );
-  diffuse->setClosestHitProgram( 3, diffuse_p );
+  diffuse->setClosestHitProgram( 2, diffuse_p );
   diffuse->setAnyHitProgram( 1, diffuse_ah );
-  diffuse2->setClosestHitProgram( 3, diffuse_p );
+  diffuse2->setClosestHitProgram( 2, diffuse_p );
   diffuse2->setAnyHitProgram( 1, diffuse_ah );
 
   //dummy texture maps
@@ -1183,7 +1154,7 @@ void GIScene::createSceneSponza(InitialCameraData& camera_data)
         "aaf_gi.cu" ), "shadow" );
   Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
         "aaf_gi.cu" ), "closest_hit_direct" );
-  diffuse->setClosestHitProgram( 3, diffuse_p );
+  diffuse->setClosestHitProgram( 2, diffuse_p );
   diffuse->setAnyHitProgram( 1, diffuse_ah );
 
   diffuse["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
@@ -1246,7 +1217,7 @@ void GIScene::createSceneConference(InitialCameraData& camera_data)
         "aaf_gi.cu" ), "shadow" );
   Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
         "aaf_gi.cu" ), "closest_hit_direct" );
-  diffuse->setClosestHitProgram( 3, diffuse_p );
+  diffuse->setClosestHitProgram( 2, diffuse_p );
   diffuse->setAnyHitProgram( 1, diffuse_ah );
 
   diffuse["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
@@ -1303,7 +1274,7 @@ void GIScene::createSceneCornell3(InitialCameraData& camera_data)
         "aaf_gi.cu" ), "shadow" );
   Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
         "aaf_gi.cu" ), "closest_hit_direct" );
-  diffuse->setClosestHitProgram( 3, diffuse_p );
+  diffuse->setClosestHitProgram( 2, diffuse_p );
   diffuse->setAnyHitProgram( 1, diffuse_ah );
 
   diffuse["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
@@ -1319,7 +1290,6 @@ void GIScene::createSceneCornell3(InitialCameraData& camera_data)
   m_context["vfov"]->setFloat( vfov );
   
   m_context["top_object"]->set( conference_geom_group );
-  m_context["top_shadower"]->set( conference_geom_group );
   m_context["spp_mu"]->setFloat(1.f);
   m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
   m_context["imp_samp_scale_specular"]->setFloat(0.1f);
