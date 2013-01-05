@@ -82,10 +82,8 @@ struct PerRayData_direct
 {
   float3 world_loc;
   float3 incoming_diffuse_light;
-  float3 incoming_specular_light;
   float3 norm;
   float3 Kd;
-  float3 Ks;
   float phong_exp;
   float z_dist;
   bool hit;
@@ -93,22 +91,16 @@ struct PerRayData_direct
 rtBuffer<float3, 2>               direct_illum;
 rtBuffer<float3, 2>               indirect_illum;
 rtBuffer<float3, 2>               indirect_illum_filter1d;
-//specular buffers
-rtBuffer<float3, 2>               indirect_illum_spec;
-rtBuffer<float3, 2>               indirect_illum_spec_filter1d;
 
 rtBuffer<float3, 2>               Kd_image;
-rtBuffer<float3, 2>               Ks_image;
 rtBuffer<float, 2>                phong_exp_image;
 rtBuffer<float2, 2>               z_dist;
 rtBuffer<float2, 2>               z_dist_filter1d;
 rtBuffer<float3, 2>               world_loc;
 rtBuffer<float3, 2>               n;
 rtBuffer<float, 2>                depth;
-rtBuffer<float, 2>                spec_wvmax;
 rtBuffer<char, 2>                 visible;
 rtDeclareVariable(float3,   Kd, , );
-rtDeclareVariable(float3,   Ks, , );
 rtDeclareVariable(float,   phong_exp, , );
 rtDeclareVariable(uint,  direct_ray_type, , );
 rtDeclareVariable(int,  z_filter_radius, , );
@@ -119,7 +111,6 @@ rtDeclareVariable(int, pixel_radius, , );
 rtDeclareVariable(uint, use_textures, , );
 rtDeclareVariable(float, spp_mu, , );
 rtDeclareVariable(float, imp_samp_scale_diffuse, ,);
-rtDeclareVariable(float, imp_samp_scale_specular, ,);
 
 rtDeclareVariable(uint, view_mode, , );
 rtDeclareVariable(float, max_heatmap, , );
@@ -127,57 +118,14 @@ rtDeclareVariable(float, max_heatmap, , );
 rtBuffer<float, 2>                 target_spb_theoretical;
 rtBuffer<float, 2>                 target_spb;
 
-rtBuffer<float, 2>                 target_spb_spec_theoretical;
-rtBuffer<float, 2>                 target_spb_spec;
-
 rtDeclareVariable(float3, texcoord, attribute texcoord, ); 
 rtTextureSampler<float4, 2>   diffuse_map;  
-rtTextureSampler<float4, 2>   specular_map;  
 
 //prefilter pass
 //x: number of rejected pixels
 //y: number of possible filtered pixels
 rtBuffer<uint2, 2>                prefilter_rejected_filter1d;
 rtBuffer<uint2, 2>                prefilter_rejected;
-
-
-//omegaxf and sampling functions
-__device__ __inline__ float glossy_blim(float3& r, float3& c, float m){
-float vc = tan(acos(dot(r,c))); //r, c must be unit vectors
-float        p00 =       2.017;
-float        p10 =      0.2575;
-float        p01 =       0.537;
-float        p20 =    -0.05937;
-float        p11 =     -0.1894;
-float        p02 =    -0.03605;
-float        p30 =    0.005778;
-float        p21 =     0.03843;
-float        p12 =    0.001897;
-float        p03 =    0.001631;
-float        p40 =  -0.0002033;
-float        p31 =   -0.003547;
-float        p22 =  -0.0002067;
-float        p13 = -1.068e-005;
-float        p04 = -3.413e-005;
-float        p41 =   0.0001219;
-float        p32 =  7.471e-006;
-float        p23 =  6.913e-007;
-float        p14 = -7.882e-009;
-float        p05 =  2.601e-007;
-
-float vc2 = vc*vc;
-float vc3 = vc2*vc;
-float vc4 = vc2*vc2;
-float m2 = m*m;
-float m3 = m2*m;
-float m4 = m2*m2;
-float m5 = m4*m;
-
-return (p00 + p10*vc + p01*m + p20*vc2 + p11*vc*m + p02*m2 + p30*vc3 
-    + p21*vc2*m + p12*vc*m2 + p03*m3 + p40*vc4 + p31*vc3*m + p22*vc2*m2  
-    + p13*vc*m3 + p04*m4 + p41*vc4*m + p32*vc3*m2 + p23*vc2*m3
-    + p14*vc*m4 + p05*m5);
-}
 
 // sample hemisphere with cosine^n density
 __device__ __inline__ void sampleUnitHemispherePower( const optix::float2& sample,
@@ -200,18 +148,6 @@ __device__ __inline__ void sampleUnitHemispherePower( const optix::float2& sampl
 
 
 
-//Filter functions
-// Our Gaussian Filter, based on w_xf
-//wxf= 1/b
-__device__ __inline__ float gaussFilter(float distsq, float wxf)
-{
-  float sample = distsq*wxf*wxf*spp_mu*spp_mu;
-  if (sample > 0.9999) {
-    return 0.0;
-  }
-
-  return exp(-sample);
-}
 
 
 __device__ __inline__ bool indirectFilterThresholds(
@@ -245,21 +181,27 @@ __device__ __inline__ bool indirectFilterThresholds(
   return false;
 }
 
+//Filter functions
+// Our Gaussian Filter, based on w_xf
+//wxf= 1/b
 __device__ __inline__ float filterWeight(
     float proj_distsq, const float3& target_n, const float3& cur_n,
-    float cur_zpmin, float wvmax)
+    float cur_zpmin)
 {
-  return gaussFilter(proj_distsq,
-      wvmax*(1.f+50.f*acos(dot(target_n,cur_n)))/cur_zpmin);
+	float wxf = 2.f*(1.f+50.f*acos(dot(target_n,cur_n)))/cur_zpmin;
+	float sample = proj_distsq*wxf*wxf;
+	if (sample > 0.9999) {
+		return 0.0;
+	}
+
+	return exp(-sample);
+
 }
 
 
 __device__ __inline__ void indirectFilter( 
     float3& blurred_indirect_sum,
     float& sum_weight,
-    float3& blurred_indirect_spec_sum,
-    float& sum_weight_spec,
-    const float cur_spec_wvmax,
     const float3& cur_world_loc,
     float3 cur_n,
     float cur_zpmin,
@@ -286,24 +228,16 @@ __device__ __inline__ void indirectFilter(
     float proj_distsq = euclidean_distsq - rDn*rDn;
     float3 target_n = n[target_index];
 
-    float diff_weight = filterWeight(proj_distsq, target_n, cur_n, cur_zpmin,
-        2.);
-    float spec_weight = filterWeight(proj_distsq, target_n, cur_n, cur_zpmin,
-        cur_spec_wvmax);
+    float diff_weight = filterWeight(proj_distsq, target_n, cur_n, cur_zpmin);
 
     float3 target_indirect = indirect_illum[target_index];
-    float3 target_indirect_spec = indirect_illum_spec[target_index];
     if (pass == 1)
     {
       target_indirect = indirect_illum_filter1d[target_index];
-      target_indirect_spec = indirect_illum_spec_filter1d[target_index];
     }
 
     blurred_indirect_sum += diff_weight * target_indirect;
     sum_weight += diff_weight;
-
-    blurred_indirect_spec_sum += spec_weight * target_indirect_spec;
-    sum_weight_spec += spec_weight;
   }
 }
 
@@ -325,22 +259,18 @@ RT_PROGRAM void closest_hit_direct()
   prd_direct.world_loc = hit_point;
   prd_direct.norm = ffnormal;
   float3 cur_Kd = Kd;
-  float3 cur_Ks = Ks;
   if (use_textures)
   {
     float2 uv = make_float2(texcoord);
     cur_Kd = make_float3(tex2D(diffuse_map, uv.x, uv.y));
-    cur_Ks = make_float3(tex2D(specular_map, uv.x, uv.y));
   }
 
   prd_direct.Kd = cur_Kd;
-  prd_direct.Ks = cur_Ks;
   prd_direct.phong_exp = phong_exp;
 
   //lights
   unsigned int num_lights = lights.size();
   float3 diffuse = make_float3(0.0f);
-  float3 specular = make_float3(0.0f);
   for(int i = 0; i < num_lights; ++i)
   {
     ParallelogramLight light = lights[i];
@@ -367,14 +297,12 @@ RT_PROGRAM void closest_hit_direct()
       if(!shadow_prd.inShadow)
       {
         diffuse += make_float3(nDl);
-        specular += make_float3(pow(nDr,phong_exp));
       }
     }
 
   }
 
   prd_direct.incoming_diffuse_light = diffuse;
-  prd_direct.incoming_specular_light = specular;
 }
 
 RT_PROGRAM void closest_hit_indirect()
@@ -395,7 +323,6 @@ RT_PROGRAM void sample_direct_z()
   prefilter_rejected[launch_index] = make_uint2(0,1);
 
     indirect_illum[launch_index] = make_float3(0);
-    indirect_illum_spec[launch_index] = make_float3(0);
 
   PerRayData_direct dir_samp;
   dir_samp.hit = false;
@@ -411,27 +338,12 @@ RT_PROGRAM void sample_direct_z()
   visible[launch_index] = true;
   
   world_loc[launch_index] = dir_samp.world_loc;
-  direct_illum[launch_index] = dir_samp.incoming_diffuse_light * dir_samp.Kd
-    + dir_samp.incoming_specular_light * dir_samp.Ks;
+  direct_illum[launch_index] = dir_samp.incoming_diffuse_light * dir_samp.Kd;
   n[launch_index] = dir_samp.norm;
   Kd_image[launch_index] = dir_samp.Kd;
-  Ks_image[launch_index] = dir_samp.Ks;
   depth[launch_index] = dir_samp.z_dist;
 
 
-  //assuming 1 light for specular omegavmax calculation
-  ParallelogramLight light = lights[0];
-  float3 L = normalize(light.corner - world_loc[launch_index]);
-  float3 cur_n = n[launch_index];
-  float3 R = normalize(2*cur_n*dot(cur_n,L)-L);
-  float3 to_camera = -ray_direction;
-
-  //use R with light or R from camera?
-  float3 perf_refl_r = ray_direction - 2*cur_n * dot(cur_n, ray_direction);
-  float cur_spec_wvmax = glossy_blim(perf_refl_r, to_camera, 
-      dir_samp.phong_exp);
-  phong_exp_image[launch_index] = dir_samp.phong_exp;
-  spec_wvmax[launch_index] = cur_spec_wvmax;
 
 
   int initial_bucket_samples_sqrt = 2;
@@ -519,14 +431,11 @@ RT_PROGRAM void sample_indirect()
   {
     target_spb_theoretical[launch_index] = 0;
     target_spb[launch_index] = 0;
-    target_spb_spec_theoretical[launch_index] = 0;
-    target_spb_spec[launch_index] = 0;
     indirect_illum[launch_index] = make_float3(0);
     return;
   }
 
   float3 Kd = Kd_image[launch_index];
-  float3 Ks = Ks_image[launch_index];
   float cur_phong_exp = phong_exp_image[launch_index];
   
   //calculate SPP
@@ -544,42 +453,20 @@ RT_PROGRAM void sample_indirect()
     * spp_term2*spp_term2;
 
 
-  float cur_spec_wvmax = spec_wvmax[launch_index];
-  float spp_spec_term1 = proj_dist * cur_spec_wvmax/cur_zd.x + alpha;
-
-  float spec_spp = imp_samp_scale_specular
-	* spp_spec_term1 * spp_spec_term1 
-    * cur_spec_wvmax*cur_spec_wvmax
-    * spp_term2*spp_term2;
-
-  target_spb_theoretical[launch_index] = spp;
-  target_spb_spec_theoretical[launch_index] = spec_spp;
-
   uint2 pf_rej = prefilter_rejected[launch_index];
   
   float rej_scale = (1.f + (float)pf_rej.x/pf_rej.y);
 
-  float Kd_mag = length(Kd);
-  float Ks_mag = length(Ks);
-  float Kd_Ks_ratio = Kd_mag/(Kd_mag+Ks_mag);
 
   spp = max(
       min(spp / (1.f-(float)pf_rej.x/pf_rej.y), 
         spp_mu*(float)max_spb_pass),
-      1.f) * Kd_Ks_ratio;
-  spec_spp = max( min(spp, spp_mu*(float)max_spb_pass), 1.f)
-    *(1-Kd_Ks_ratio); 
-  //TODO: distribute samples according to kd to ks ratio, account for prefilt
+      1.f);
 
   float spp_sqrt = sqrt(spp);
   int spp_sqrt_int = (int) ceil(spp_sqrt);
   int spp_int = spp_sqrt_int * spp_sqrt_int;
   target_spb[launch_index] = spp_int;
-
-  float spp_spec_sqrt = sqrt(spec_spp);
-  int spp_spec_sqrt_int = (int) ceil(spp_spec_sqrt);
-  int spp_spec_int = spp_spec_sqrt_int * spp_spec_sqrt_int;
-  target_spb_spec[launch_index] = spp_spec_int;
 
   float3 first_hit = world_loc[launch_index];
   float3 normal = n[launch_index];
@@ -587,7 +474,6 @@ RT_PROGRAM void sample_indirect()
   //diffuse
   //sample this hemisphere with cosine (aligned to normal) weighting
   float3 incoming_diff_indirect = make_float3(0);
-  float3 incoming_spec_indirect = make_float3(0);
   size_t2 screen = direct_illum.size();
   unsigned int seed = tea<16>(screen.x*launch_index.y+launch_index.x,
       frame_number); //TODO :verify
@@ -599,10 +485,8 @@ RT_PROGRAM void sample_indirect()
     float3 rn_u, rn_v, rn_w;
     float3 sample_dir;
     float3 sample_diffuse_color = make_float3(0);
-    float3 sample_specular_color = make_float3(0);
     float3 prev_dir = normalize(first_hit-eye);
 	float3 prev_Kd = make_float3(1.f);
-	float3 prev_Ks = make_float3(1.f);
     float prev_phong_exp = cur_phong_exp;
     for (int depth = 0; depth < indirect_ray_depth; ++depth)
     {
@@ -622,94 +506,22 @@ RT_PROGRAM void sample_indirect()
         break;
       float3 R = normalize(2*ray_n*dot(ray_n, sample_dir)-sample_dir);
       float nDr = max(dot(-prev_dir, R), 0.f);
-      float3 incoming_light = prd.incoming_specular_light * prd.Ks 
-        + prd.incoming_diffuse_light * prd.Kd;
+      float3 incoming_light = prd.incoming_diffuse_light * prd.Kd;
 
       sample_diffuse_color += incoming_light * prev_Kd;
-      sample_specular_color += incoming_light*pow(nDr, prev_phong_exp) 
-		  * prev_Ks;
       ray_origin = prd.world_loc;
       ray_n = prd.norm;
       prev_dir = sample_dir;
       prev_phong_exp = prd.phong_exp;
 	  prev_Kd = prd.Kd;
-	  prev_Ks = prd.Ks;
     }
     incoming_diff_indirect += sample_diffuse_color;
-    incoming_spec_indirect += sample_specular_color;
   }
 
-  //specular
-  //sample this hemisphere with cos^n (aligned to reflected angle) weighting
-  for (int samp = 0; samp < spp_spec_int; ++samp)
-  {
-    PerRayData_direct prd;
-    float3 ray_origin = first_hit;
-    float3 ray_n = normal;
-    float3 rns_u, rns_v, rns_w;
-    float3 prev_dir = normalize(first_hit-eye);
-
-    float3 sample_dir;
-    float3 sample_diffuse_color = make_float3(0);
-    float3 sample_specular_color = make_float3(0);
-	float3 prev_Kd = make_float3(1.f);
-	float3 prev_Ks = make_float3(1.f);
-    float prev_phong_exp = cur_phong_exp;
-    for (int depth = 0; depth < indirect_ray_depth; ++depth)
-    {
-      prd.hit = false;
-
-      prev_dir = normalize(prev_dir);
-      float3 perf_refl = normalize(prev_dir - 2*ray_n*dot(ray_n, prev_dir));
-      createONB(perf_refl, rns_u, rns_v, rns_w);
-
-      float2 rand_samp = make_float2(rnd(seed), rnd(seed));
-      //stratify x,y
-      rand_samp.x = (samp%spp_spec_sqrt_int + rand_samp.x)/spp_spec_sqrt_int;
-      rand_samp.y = (((int)samp/spp_spec_sqrt_int) + rand_samp.y)
-        /spp_spec_sqrt_int;
-
-      sampleUnitHemispherePower(rand_samp, rns_u, rns_v, rns_w, cur_phong_exp,
-          sample_dir);
-
-      Ray ray = make_Ray(ray_origin, sample_dir,
-          direct_ray_type, scene_epsilon, RT_DEFAULT_MAX);
-      rtTrace(top_object, ray, prd);
-      if (!prd.hit)
-        break;
-
-      //move this somewhere else...
-      float nDl = max(dot(ray_n,sample_dir),0.f);
-      float3 incoming_light = prd.incoming_specular_light * prd.Ks 
-        + prd.incoming_diffuse_light * prd.Kd;
-      float3 R = normalize(ray_n*2*dot(ray_n, sample_dir)-sample_dir);
-      float nDr = max(dot(-prev_dir,R),0.f);
-      float nDrn = pow(nDr, prev_phong_exp);
-/*
-      if(nDrn > 0.01)
-        sample_diffuse_color += incoming_light * nDl/nDrn
-          * 2.f/(prev_phong_exp+1);
-*/
-      sample_specular_color += prev_Ks * incoming_light * nDl 
-        * 2.f/(prev_phong_exp+1);
-
-      ray_origin = prd.world_loc;
-      ray_n = prd.norm;
-      prev_dir = sample_dir;
-      prev_phong_exp = prd.phong_exp;
-	  prev_Ks = prd.Ks;
-	  prev_Kd = prd.Kd;
-    }
-    incoming_diff_indirect += sample_diffuse_color;
-    incoming_spec_indirect += sample_specular_color;
-  }
-  //incoming_diff_indirect /= (float)spp_int+spp_spec_int;
-  incoming_spec_indirect /= (float)spp_int+spp_spec_int;
   incoming_diff_indirect /= (float)spp_int;
   //incoming_spec_indirect /= (float)spp_int;
   
   indirect_illum[launch_index] = incoming_diff_indirect;
-  indirect_illum_spec[launch_index] = incoming_spec_indirect;
 
 }
 RT_PROGRAM void indirect_filter_first_pass()
@@ -719,11 +531,6 @@ RT_PROGRAM void indirect_filter_first_pass()
   float3 blurred_indirect_sum = make_float3(0.f);
   float sum_weight = 0.f;
 
-  float3 blurred_indirect_spec_sum = make_float3(0.f);
-  float sum_weight_spec = 0.f;
-
-  float cur_spec_wvmax = spec_wvmax[launch_index];
-
   float3 cur_world_loc = world_loc[launch_index];
   float3 cur_n = n[launch_index];
 
@@ -732,7 +539,6 @@ RT_PROGRAM void indirect_filter_first_pass()
     {
       uint2 target_index = make_uint2(launch_index.x+i, launch_index.y);
       indirectFilter(blurred_indirect_sum, sum_weight,
-          blurred_indirect_spec_sum, sum_weight_spec, cur_spec_wvmax,
           cur_world_loc, cur_n, cur_zmin,
           target_index, buf_size, 0);
     }
@@ -741,12 +547,6 @@ RT_PROGRAM void indirect_filter_first_pass()
     indirect_illum_filter1d[launch_index] = blurred_indirect_sum/sum_weight;
   else
     indirect_illum_filter1d[launch_index] = indirect_illum[launch_index];
-  if (sum_weight_spec > 0.0001f)
-    indirect_illum_spec_filter1d[launch_index] = blurred_indirect_spec_sum
-      /sum_weight_spec;
-  else
-    indirect_illum_spec_filter1d[launch_index] = 
-      indirect_illum_spec[launch_index];
 }
 RT_PROGRAM void indirect_filter_second_pass()
 {
@@ -757,12 +557,6 @@ RT_PROGRAM void indirect_filter_second_pass()
   size_t2 buf_size = indirect_illum.size();
   float3 blurred_indirect_sum = make_float3(0.f);
   float sum_weight = 0.f;
-
-  float3 blurred_indirect_spec_sum = make_float3(0.f);
-  float sum_weight_spec = 0.f;
-
-  float cur_spec_wvmax = spec_wvmax[launch_index];
-
 
   float3 cur_world_loc = world_loc[launch_index];
   float3 cur_n = n[launch_index];
@@ -777,7 +571,6 @@ RT_PROGRAM void indirect_filter_second_pass()
     {
       uint2 target_index = make_uint2(launch_index.x, launch_index.y+i);
       indirectFilter(blurred_indirect_sum, sum_weight,
-          blurred_indirect_spec_sum, sum_weight_spec, cur_spec_wvmax,
           cur_world_loc, cur_n, cur_zmin,
           target_index, buf_size, 1);
     }
@@ -786,13 +579,6 @@ RT_PROGRAM void indirect_filter_second_pass()
     indirect_illum[launch_index] = blurred_indirect_sum/sum_weight;
   else
     indirect_illum[launch_index] = indirect_illum_filter1d[launch_index];
-  if (sum_weight_spec > 0.0001f)
-    indirect_illum_spec[launch_index] = blurred_indirect_spec_sum
-      /sum_weight_spec;
-  else
-    indirect_illum_spec[launch_index] = 
-      indirect_illum_spec_filter1d[launch_index];
-
 }
 RT_PROGRAM void indirect_prefilter_first_pass()
 {
@@ -830,8 +616,7 @@ RT_PROGRAM void indirect_prefilter_first_pass()
         float proj_distsq = euclidean_distsq - rDn*rDn;
         float3 target_n = n[target_index];
 
-        float weight = filterWeight(proj_distsq, target_n, cur_n, cur_zmin, 
-            2.);
+        float weight = filterWeight(proj_distsq, target_n, cur_n, cur_zmin);
         if (weight > 0.01)
         {
           cur_prefilter_rej.x += (!can_filter);
@@ -871,8 +656,7 @@ RT_PROGRAM void indirect_prefilter_second_pass()
         float proj_distsq = euclidean_distsq - rDn*rDn;
         float3 target_n = n[target_index];
 
-        float weight = filterWeight(proj_distsq, target_n, cur_n, cur_zmin, 
-            2.);
+        float weight = filterWeight(proj_distsq, target_n, cur_n, cur_zmin);
         if (weight > 0.01)
         {
           uint2 firstpass_pf_rej = 
@@ -886,81 +670,42 @@ RT_PROGRAM void indirect_prefilter_second_pass()
   prefilter_rejected[launch_index] = cur_prefilter_rej;
 }
 
-
-// HeatMap visualization
-__device__ __inline__ float3 heatMap(float val) {
-  float fraction;
-  if (val < 0.0f)
-    fraction = -1.0f;
-  else if (val > 1.0f)
-    fraction = 1.0f;
-  else
-    fraction = 2.0f * val - 1.0f;
-
-  if (fraction < -0.5f)
-    return make_float3(0.0f, 2*(fraction+1.0f), 1.0f);
-  else if (fraction < 0.0f)
-    return make_float3(0.0f, 1.0f, 1.0f - 2.0f * (fraction + 0.5f));
-  else if (fraction < 0.5f)
-    return make_float3(2.0f * fraction, 1.0f, 0.0f);
-  else
-    return make_float3(1.0f, 1.0f - 2.0f*(fraction - 0.5f), 0.0f);
-}
-
 RT_PROGRAM void display()
 {
-  float3 indirect_illum_combined = make_float3(0);
-  float3 indirect_illum_spec_combined = make_float3(0);
-  indirect_illum_combined = indirect_illum[make_uint2(launch_index.x, 
+  float3 indirect_illum_combined = indirect_illum[make_uint2(launch_index.x, 
 	  launch_index.y)];
-  indirect_illum_spec_combined = indirect_illum_spec[
-	  make_uint2(launch_index.x, launch_index.y)];
-
   float3 indirect_illum_full = indirect_illum_combined * Kd_image[launch_index];
-  float3 indirect_illum_spec_full = indirect_illum_spec_combined 
-    * Ks_image[launch_index];
   output_buffer[launch_index] = make_float4(
       direct_illum[launch_index] 
-      + indirect_illum_spec_full + indirect_illum_full,1);
-
-  //other view modes
-  if (view_mode)
-  {
-    if (view_mode == 1)
-      output_buffer[launch_index] = make_float4(direct_illum[launch_index],1);
-    if (view_mode == 2)
-    {
-        output_buffer[launch_index] = make_float4(
-            indirect_illum_full+indirect_illum_spec_full,1);
-    }
-    if (view_mode == 3)
-    {
-        output_buffer[launch_index] = make_float4(
-            indirect_illum_combined+indirect_illum_spec_combined,1);
-    }
-    if (view_mode == 4)
-    {
-        output_buffer[launch_index] = make_float4(indirect_illum_full,1);
-    }
-    if (view_mode == 5)
-    {
-        output_buffer[launch_index] = make_float4(
-            indirect_illum_combined,1);
-    }
-
-    if (view_mode == 6)
-    {
-        output_buffer[launch_index] = make_float4(
-            indirect_illum_spec_full,1);
-    }
-    if (view_mode == 7)
-    {
-        output_buffer[launch_index] = make_float4(
-            indirect_illum_spec_combined,1);
-    }
-
-  }
-
+      + indirect_illum_full,1);	  /*
+	  //other view modes
+	  if (view_mode)
+	  {
+	  if (view_mode == 1)
+	  output_buffer[launch_index] = make_float4(direct_illum[launch_index],1);
+	  if (view_mode == 2)
+	  {
+	  output_buffer[launch_index] = make_float4(
+	  indirect_illum_full,1);
+	  }
+	  if (view_mode == 3)
+	  {
+	  output_buffer[launch_index] = make_float4(
+	  indirect_illum_combined,1);
+	  }
+	  if (view_mode == 4)
+	  {
+	  output_buffer[launch_index] = make_float4(indirect_illum_full,1);
+	  }
+	  if (view_mode == 5)
+	  {
+	  output_buffer[launch_index] = make_float4(
+	  indirect_illum_combined,1);
+	  }
+	  
+	  
+	  }
+	  */
 }
 
 
@@ -998,7 +743,6 @@ RT_PROGRAM void sample_indirect_gt()
   //ignore buckets, and place all results in the first bucket multiplied
   //by number of buckets used in non-gt code so we can use the same code
   float3 incoming_indirect_diffuse = make_float3(0);
-  float3 incoming_indirect_specular = make_float3(0);
   unsigned int seed = tea<16>(out_buf.x*launch_index.y+launch_index.x,
       frame_number); //TODO :verify
   for(int samp = 0; samp < samp_this_pass; ++samp)
@@ -1011,7 +755,6 @@ RT_PROGRAM void sample_indirect_gt()
     float3 rn_u, rn_v, rn_w;
     float3 sample_dir;
     float3 incoming_diffuse = make_float3(0);
-    float3 incoming_specular = make_float3(0);
     float3 prev_dir = normalize(first_hit-eye);
     float prev_phong_exp = phong_exp_image[launch_index];
     for (int depth = 0; depth < indirect_ray_depth; ++depth)
@@ -1034,23 +777,18 @@ RT_PROGRAM void sample_indirect_gt()
         break;
       float3 R = normalize(ray_n*2*dot(ray_n, sample_dir)-sample_dir);
       float nDr = max(dot(-prev_dir,R),0.f);
-      float3 incoming_light = prd.incoming_diffuse_light * prd.Kd
-        + prd.incoming_specular_light * prd.Ks;
+      float3 incoming_light = prd.incoming_diffuse_light * prd.Kd;
       incoming_diffuse += incoming_light;
-      incoming_specular += incoming_light * pow(nDr, prev_phong_exp);
       ray_origin = prd.world_loc;
       ray_n = prd.norm;
       prev_dir = sample_dir;
       prev_phong_exp = prd.phong_exp;
     }
     incoming_indirect_diffuse += incoming_diffuse;
-    incoming_indirect_specular += incoming_specular;
 
   }
 
   indirect_illum[launch_index] += incoming_indirect_diffuse
-    /total_gt_samples;
-  indirect_illum_spec[launch_index] += incoming_indirect_specular
     /total_gt_samples;
 
 }

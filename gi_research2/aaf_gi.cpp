@@ -7,7 +7,7 @@
 //=== Configuration
 
 // Enable debug buffers (for stats and additional views)
-#define DEBUG_BUF
+//#define DEBUG_BUF
 
 // Choose scene:
 // 0: Cornell box
@@ -248,9 +248,6 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context["indirect_illum"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT3, m_width, m_height));
-  m_context["indirect_illum_spec"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
-        RT_FORMAT_FLOAT3, m_width, m_height));
 
   //Image-space Kd, Ks buffers
   m_context["Kd_image"]->set(
@@ -300,22 +297,12 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context["indirect_illum_filter1d"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT3, m_width, m_height));
-  m_context["indirect_illum_spec_filter1d"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
-        RT_FORMAT_FLOAT3, m_width, m_height));
 
   //spp buffer
   m_context["target_spb"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
         RT_FORMAT_FLOAT, m_width, m_height));
   m_context["target_spb_theoretical"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
-        RT_FORMAT_FLOAT, m_width, m_height));
-
-  m_context["target_spb_spec"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
-        RT_FORMAT_FLOAT, m_width, m_height));
-  m_context["target_spb_spec_theoretical"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
         RT_FORMAT_FLOAT, m_width, m_height));
 
@@ -327,10 +314,6 @@ void GIScene::initScene( InitialCameraData& camera_data )
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
         RT_FORMAT_INT2, m_width, m_height));
 
-  //specular omegavmax buffer
-  m_context["spec_wvmax"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
-        RT_FORMAT_FLOAT, m_width, m_height));
 
 
   //View Mode for displaying different buffers
