@@ -22,7 +22,6 @@ rtDeclareVariable(float3,        V, , );
 rtDeclareVariable(float3,        W, , );
 rtDeclareVariable(float3,        bad_color, , );
 rtDeclareVariable(unsigned int,  frame_number, , );
-rtDeclareVariable(unsigned int,  sqrt_num_samples, , );
 rtBuffer<float4, 2>              output_buffer;
 rtBuffer<ParallelogramLight>     lights;
 
@@ -120,6 +119,8 @@ rtDeclareVariable(uint, indirect_ray_depth, , );
 rtDeclareVariable(int, pixel_radius, , );
 rtDeclareVariable(uint, use_textures, , );
 rtDeclareVariable(float, spp_mu, , );
+rtDeclareVariable(float, imp_samp_scale_diffuse, ,);
+rtDeclareVariable(float, imp_samp_scale_specular, ,);
 
 rtDeclareVariable(uint, view_mode, , );
 rtDeclareVariable(uint, view_bucket, , );
@@ -577,14 +578,16 @@ RT_PROGRAM void sample_indirect()
   float spp_term1 = proj_dist * diff_wvmax/cur_zd.x + alpha;
   float spp_term2 = 1+cur_zd.y/cur_zd.x;
 
-  float spp = spp_term1*spp_term1 * diff_wvmax*diff_wvmax 
+  float spp = imp_samp_scale_diffuse
+	*spp_term1*spp_term1 * diff_wvmax*diff_wvmax 
     * spp_term2*spp_term2;
 
 
   float cur_spec_wvmax = spec_wvmax[screen_index];
   float spp_spec_term1 = proj_dist * cur_spec_wvmax/cur_zd.x + alpha;
 
-  float spec_spp = spp_spec_term1 * spp_spec_term1 
+  float spec_spp = imp_samp_scale_specular
+	* spp_spec_term1 * spp_spec_term1 
     * cur_spec_wvmax*cur_spec_wvmax
     * spp_term2*spp_term2;
 
@@ -641,6 +644,8 @@ RT_PROGRAM void sample_indirect()
     float3 sample_diffuse_color = make_float3(0);
     float3 sample_specular_color = make_float3(0);
     float3 prev_dir = normalize(first_hit-eye);
+	float3 prev_Kd = make_float3(1.f);
+	float3 prev_Ks = make_float3(1.f);
     float prev_phong_exp = cur_phong_exp;
     for (int depth = 0; depth < indirect_ray_depth; ++depth)
     {
@@ -665,12 +670,15 @@ RT_PROGRAM void sample_indirect()
       float3 incoming_light = prd.incoming_specular_light * prd.Ks 
         + prd.incoming_diffuse_light * prd.Kd;
 
-      sample_diffuse_color += incoming_light;
-      sample_specular_color += incoming_light*pow(nDr, prev_phong_exp);
+      sample_diffuse_color += incoming_light * prev_Kd;
+      sample_specular_color += incoming_light*pow(nDr, prev_phong_exp) 
+		  * prev_Ks;
       ray_origin = prd.world_loc;
       ray_n = prd.norm;
       prev_dir = sample_dir;
       prev_phong_exp = prd.phong_exp;
+	  prev_Kd = prd.Kd;
+	  prev_Ks = prd.Ks;
     }
     incoming_diff_indirect += sample_diffuse_color;
     incoming_spec_indirect += sample_specular_color;
@@ -689,6 +697,8 @@ RT_PROGRAM void sample_indirect()
     float3 sample_dir;
     float3 sample_diffuse_color = make_float3(0);
     float3 sample_specular_color = make_float3(0);
+	float3 prev_Kd = make_float3(1.f);
+	float3 prev_Ks = make_float3(1.f);
     float prev_phong_exp = cur_phong_exp;
     for (int depth = 0; depth < indirect_ray_depth; ++depth)
     {
@@ -727,13 +737,15 @@ RT_PROGRAM void sample_indirect()
         sample_diffuse_color += incoming_light * nDl/nDrn
           * 2.f/(prev_phong_exp+1);
 */
-      sample_specular_color += incoming_light * nDl 
+      sample_specular_color += prev_Ks * incoming_light * nDl 
         * 2.f/(prev_phong_exp+1);
 
       ray_origin = prd.world_loc;
       ray_n = prd.norm;
       prev_dir = sample_dir;
       prev_phong_exp = prd.phong_exp;
+	  prev_Ks = prd.Ks;
+	  prev_Kd = prd.Kd;
     }
     incoming_diff_indirect += sample_diffuse_color;
     incoming_spec_indirect += sample_specular_color;
@@ -812,6 +824,7 @@ RT_PROGRAM void indirect_filter_second_pass()
   float proj_dist = 2./screen_size.y * depth[screen_index] 
     * tan(vfov/2.*M_PI/180.);
   int radius = min(10.f,max(1.f,cur_zmin/proj_dist));
+  radius = 10;
   
   if (visible[screen_index])
     for (int i = -radius; i < radius; ++i)
@@ -854,6 +867,7 @@ RT_PROGRAM void indirect_prefilter_first_pass()
   float proj_dist = 2./screen_size.y * depth[screen_index] 
     * tan(vfov/2.*M_PI/180.);
   int radius = min(10.f,max(1.f,cur_zmin/proj_dist));
+  radius = 10;
 
   if (visible[screen_index])
     for (int i = -radius; i < radius; ++i)

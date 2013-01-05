@@ -16,13 +16,13 @@
 // 3: Cornell box 2 (Soham's w/ objs)
 // 4: Cornell box 3 (Glossy defined by obj)
 // 5: Sibenik
-#define SCENE 1
+#define SCENE 2
 
 //number of buckets to split hemisphere into
 #define NUM_BUCKETS 1
 
 //number of maximum samples per pixel
-//#define MAX_SPP 100
+//#define MAX_SPP 200
 #define MAX_SPP 25
 
 //depth of indirect bounces
@@ -35,6 +35,8 @@
 #define GT_SAMPLES_SQRT 64
 
 //default width, height
+//#define WIDTH 640u
+//#define HEIGHT 480u
 #define WIDTH 512u
 #define HEIGHT 512u
 //#define WIDTH 1024u
@@ -1003,7 +1005,7 @@ void GIScene::createSceneSibenik(InitialCameraData& camera_data)
   diffuse["phong_exp"]->setFloat( 1.f );
   
   std::string objpath = std::string( sutilSamplesDir() ) + 
-    "/gi_research/data/sibenik/sibenik.obj";
+    "/gi_research2/data/sibenik/sibenik.obj";
   ObjLoader * conference_loader = new ObjLoader( objpath.c_str(), 
       m_context, conference_geom_group, diffuse, true );
   conference_loader->load();
@@ -1013,6 +1015,8 @@ void GIScene::createSceneSibenik(InitialCameraData& camera_data)
   m_context["top_object"]->set( conference_geom_group );
   m_context["top_shadower"]->set( conference_geom_group );
   m_context["spp_mu"]->setFloat(0.7f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(0.2f);
+  m_context["imp_samp_scale_specular"]->setFloat(0.1f);
 }
 
 
@@ -1170,6 +1174,8 @@ void GIScene::createSceneCornell(InitialCameraData& camera_data)
   m_context["top_object"]->set( geometry_group );
   m_context["vfov"]->setFloat( vfov );
   m_context["spp_mu"]->setFloat(1.f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
+  m_context["imp_samp_scale_specular"]->setFloat(0.1f);
 }
 
 
@@ -1310,21 +1316,21 @@ void GIScene::createSceneCornell2(InitialCameraData& camera_data)
   Matrix4x4 teapot1_xform = Matrix4x4::translate(make_float3(420,80,250)) 
     * Matrix4x4::rotate(M_PI - M_PI/4,make_float3(0,1,0)) * Matrix4x4::scale(make_float3(10,10,10));
 
-  std::string objpath = std::string( sutilSamplesDir() ) + "/gi_research/data/teapot2.obj";
+  std::string objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/teapot2.obj";
   ObjLoader * teapot1_loader = new ObjLoader( objpath.c_str(), m_context, geom_group, diffuse, true );
   teapot1_loader->load(teapot1_xform);
 
   Matrix4x4 teapot2_xform = Matrix4x4::translate(make_float3(130,80,150)) 
     * Matrix4x4::rotate(M_PI/4,make_float3(0,1,0)) * Matrix4x4::scale(make_float3(10,10,10));
 
-  objpath = std::string( sutilSamplesDir() ) + "/gi_research/data/teapot2.obj";
+  objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/teapot2.obj";
   ObjLoader * teapot2_loader = new ObjLoader( objpath.c_str(), m_context, geom_group, diffuse, true );
   teapot2_loader->load(teapot2_xform);
 
   Matrix4x4 vase_xform = Matrix4x4::translate(make_float3(400,0,380))	
     * Matrix4x4::rotate(M_PI-M_PI/8,make_float3(0,-1,0)) * Matrix4x4::scale(make_float3(1.9,1.9,1.9));
 
-  objpath = std::string( sutilSamplesDir() ) + "/gi_research/data/Vase.obj";
+  objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/vase.obj";
   ObjLoader * vase_loader = new ObjLoader( objpath.c_str(), m_context, geom_group, diffuse2, true );
   vase_loader->load(vase_xform);
 
@@ -1333,6 +1339,8 @@ void GIScene::createSceneCornell2(InitialCameraData& camera_data)
   m_context["top_object"]->set( geom_group );
   m_context["top_shadower"]->set( geom_group );
   m_context["spp_mu"]->setFloat(1.f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
+  m_context["imp_samp_scale_specular"]->setFloat(0.1f);
 }
 
 
@@ -1395,6 +1403,8 @@ void GIScene::createSceneSponza(InitialCameraData& camera_data)
   
   m_context["top_object"]->set( conference_geom_group );
   m_context["top_shadower"]->set( conference_geom_group );
+  m_context["imp_samp_scale_diffuse"]->setFloat(0.3f);
+  m_context["imp_samp_scale_specular"]->setFloat(0.f);
 
 }
 
@@ -1452,6 +1462,8 @@ void GIScene::createSceneConference(InitialCameraData& camera_data)
   m_context["top_object"]->set( conference_geom_group );
   m_context["top_shadower"]->set( conference_geom_group );
   m_context["spp_mu"]->setFloat(.8f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
+  m_context["imp_samp_scale_specular"]->setFloat(0.f);
 }
 
 void GIScene::createSceneCornell3(InitialCameraData& camera_data)
@@ -1507,6 +1519,8 @@ void GIScene::createSceneCornell3(InitialCameraData& camera_data)
   m_context["top_object"]->set( conference_geom_group );
   m_context["top_shadower"]->set( conference_geom_group );
   m_context["spp_mu"]->setFloat(1.f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
+  m_context["imp_samp_scale_specular"]->setFloat(0.1f);
 }
 
 //-----------------------------------------------------------------------------
