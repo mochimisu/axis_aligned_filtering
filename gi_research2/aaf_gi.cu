@@ -185,7 +185,7 @@ __device__ __inline__ float filterWeight(
     float cur_zpmin)
 {
 	float wxf = 2.f*(1.f+50.f*acos(dot(target_n,cur_n)))/cur_zpmin;
-	float sample = proj_distsq*wxf*wxf;
+	float sample = proj_distsq*wxf*wxf*spp_mu*spp_mu;
 	if (sample > 0.9999) {
 		return 0.0;
 	}
@@ -438,8 +438,8 @@ RT_PROGRAM void sample_indirect()
     * tan(vfov/2.*M_PI/180.);
   float diff_wvmax = 2; //Constant for now (diffuse)
   float alpha = 1;
-  float spp_term1 = proj_dist * diff_wvmax/cur_zd.x + alpha;
-  float spp_term2 = 1+cur_zd.y/cur_zd.x;
+  float spp_term1 = proj_dist * spp_mu*diff_wvmax/cur_zd.x + alpha;
+  float spp_term2 = 1+spp_mu*cur_zd.y/cur_zd.x;
 
   float spp = imp_samp_scale_diffuse
 	*spp_term1*spp_term1 * diff_wvmax*diff_wvmax 
@@ -453,8 +453,8 @@ RT_PROGRAM void sample_indirect()
 
 
   spp = max(
-      min(spp / (1.f-(float)pf_rej.x/pf_rej.y), 
-        spp_mu*(float)max_spb_pass),
+      min(spp_mu*spp / (1.f-(float)pf_rej.x/pf_rej.y), 
+        (float)max_spb_pass),
       1.f);
 
   float spp_sqrt = sqrt(spp);
@@ -472,7 +472,8 @@ RT_PROGRAM void sample_indirect()
   unsigned int seed = tea<16>(screen.x*launch_index.y+launch_index.x,
       frame_number); //TODO :verify
   float3 rn_u, rn_v, rn_w;
-  float3 sample_dir;
+  float3 sample_dir;
+
   float3 ray_origin;
   float3 ray_n;
   float3 sample_diffuse_color;
@@ -530,6 +531,7 @@ RT_PROGRAM void sample_indirect()
 }
 RT_PROGRAM void indirect_filter_first_pass()
 {
+size_t2 screen_size = output_buffer.size();
   float cur_zmin = z_dist[launch_index].x;
   size_t2 buf_size = indirect_illum.size();
   float3 blurred_indirect_sum = make_float3(0.f);
@@ -537,10 +539,15 @@ RT_PROGRAM void indirect_filter_first_pass()
 
   float3 cur_world_loc = world_loc[launch_index];
   float3 cur_n = n[launch_index];
+  
+  //float proj_dist = 2./screen_size.y * depth[launch_index] 
+  //* tan(vfov/2.*M_PI/180.);
+  //int radius = min(10.f,max(1.f,cur_zmin/proj_dist));
+  int radius = pixel_radius;
 
   if (visible[launch_index])
-    for (int i = -pixel_radius; i < pixel_radius; ++i)
-    {
+	  for (int i = -radius; i < radius; ++i)
+	  {
       uint2 target_index = make_uint2(launch_index.x+i, launch_index.y);
       indirectFilter(blurred_indirect_sum, sum_weight,
           cur_world_loc, cur_n, cur_zmin,
@@ -565,9 +572,10 @@ RT_PROGRAM void indirect_filter_second_pass()
   float3 cur_world_loc = world_loc[launch_index];
   float3 cur_n = n[launch_index];
   
-  float proj_dist = 2./screen_size.y * depth[launch_index] 
-    * tan(vfov/2.*M_PI/180.);
-  int radius = min(10.f,max(1.f,cur_zmin/proj_dist));
+  //float proj_dist = 2./screen_size.y * depth[launch_index] 
+  //* tan(vfov/2.*M_PI/180.);
+  //int radius = min(10.f,max(1.f,cur_zmin/proj_dist));
+  int radius = pixel_radius;
   
   if (visible[launch_index])
     for (int i = -radius; i < radius; ++i)
@@ -583,6 +591,10 @@ RT_PROGRAM void indirect_filter_second_pass()
   else
     indirect_illum[launch_index] = indirect_illum_filter1d[launch_index];
 }
+  //float proj_dist = 2./screen_size.y * depth[launch_index] 
+  //* tan(vfov/2.*M_PI/180.);
+  //int radius = min(10.f,max(1.f,cur_zmin/proj_dist));
+  int radius = pixel_radius;
 RT_PROGRAM void indirect_prefilter_first_pass()
 {
   
@@ -599,6 +611,7 @@ RT_PROGRAM void indirect_prefilter_first_pass()
   float proj_dist = 2./screen_size.y * depth[launch_index] 
     * tan(vfov/2.*M_PI/180.);
   int radius = min(10.f,max(1.f,cur_zmin/proj_dist));
+  //int radius = pixel_radius;
 
   if (visible[launch_index])
     for (int i = -radius; i < radius; ++i)
@@ -627,6 +640,7 @@ RT_PROGRAM void indirect_prefilter_first_pass()
 
 RT_PROGRAM void indirect_prefilter_second_pass()
 {
+size_t2 screen_size = output_buffer.size();
 
   float cur_zmin = z_dist[launch_index].x;
   size_t2 buf_size = indirect_illum.size();
@@ -636,9 +650,14 @@ RT_PROGRAM void indirect_prefilter_second_pass()
 
   uint2 cur_prefilter_rej = make_uint2(0,0);
 
+  float proj_dist = 2./screen_size.y * depth[launch_index] 
+  * tan(vfov/2.*M_PI/180.);
+  int radius = min(10.f,max(1.f,cur_zmin/proj_dist));
+  //int radius = pixel_radius;
+  
   if (visible[launch_index])
-    for (int i = -pixel_radius; i < pixel_radius; ++i)
-    {
+  for (int i = -radius; i < radius; ++i)
+  {
       //TODO: cleanup
       uint2 target_index = make_uint2(launch_index.x+i, launch_index.y);
       if (target_index.x > 0 && target_index.x < buf_size.x 

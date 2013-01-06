@@ -16,14 +16,17 @@
 // 3: Cornell box 2 (Soham's w/ objs)
 // 4: Cornell box 3 (Glossy defined by obj)
 // 5: Sibenik
-#define SCENE 1
+// 6: Cornell 4
+#define SCENE 2
 
 //number of maximum samples per pixel
-#define MAX_SPP 100
+#define MAX_SPP 121
+//#define MAX_SPP 100
+//#define MAX_SPP 64
 //#define MAX_SPP 25
 
 //depth of indirect bounces
-#define INDIRECT_BOUNCES 1
+#define INDIRECT_BOUNCES 2
 
 //enable GT mode
 //#define GROUNDTRUTH
@@ -34,10 +37,15 @@
 //default width, height
 //#define WIDTH 640u
 //#define HEIGHT 480u
-#define WIDTH 512u
-#define HEIGHT 512u
+//#define WIDTH 512u
+//#define HEIGHT 512u
+#define WIDTH 640u
+#define HEIGHT 480u
 //#define WIDTH 1024u
 //#define HEIGHT 1024u
+
+//windows timing
+#define WINDOWS_TIME
 
 //=== End config
 
@@ -63,6 +71,32 @@
 #include "helpers.h"
 
 using namespace optix;
+
+#ifdef WINDOWS_TIME
+#include <Windows.h>
+#define NUM_FRAMES_TIME 100.
+double pc_freq = 0.;
+__int64 counter_start = 0;
+double timings [4] = {0., 0., 0., 0.};
+
+void StartCounter()
+{
+LARGE_INTEGER li;
+if(!QueryPerformanceFrequency(&li))
+std::cout << "QueryPerformanceFrequency failed!" << std::endl;
+
+pc_freq = double(li.QuadPart)/1000.0;
+
+QueryPerformanceCounter(&li);
+counter_start = li.QuadPart;
+}
+double GetCounter()
+{
+LARGE_INTEGER li;
+QueryPerformanceCounter(&li);
+return double(li.QuadPart-counter_start)/pc_freq;
+}
+#endif
 
 //-----------------------------------------------------------------------------
 //
@@ -113,6 +147,7 @@ private:
   void createSceneCornell(InitialCameraData& camera_data);
   void createSceneCornell2(InitialCameraData& camera_data);
   void createSceneCornell3(InitialCameraData& camera_data);
+  void createSceneCornell4(InitialCameraData& camera_data);
   void createSceneSponza(InitialCameraData& camera_data);
   void createSceneConference(InitialCameraData& camera_data);
   void createSceneSibenik(InitialCameraData& camera_data);
@@ -273,7 +308,8 @@ void GIScene::initScene( InitialCameraData& camera_data )
   //Depth buffer
   m_context["depth"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
-        RT_FORMAT_FLOAT, m_width, m_height));
+        RT_FORMAT_FLOAT, m_width, m_height));
+
   m_context["target_spb"]->set(
 	  m_context->createBuffer(RT_BUFFER_OUTPUT | debug_buf_type,
 	  RT_FORMAT_FLOAT, m_width, m_height));
@@ -340,6 +376,8 @@ void GIScene::initScene( InitialCameraData& camera_data )
   createSceneCornell3(camera_data);
 #elif SCENE == 5
   createSceneSibenik(camera_data);
+#elif SCENE == 6
+  createSceneCornell4(camera_data);
 #endif
   
 
@@ -609,22 +647,56 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 
   m_context["frame_number"]->setUint( m_frame++ );
 
+#ifdef WINDOWS_TIME
+  StartCounter();
+#endif
+  //direct
   m_context->launch( 0, static_cast<unsigned int>(buffer_width), 
       static_cast<unsigned int>(buffer_height));
-#if 1
+#ifdef WINDOWS_TIME
+if(m_frame > 10)
+  timings[0] += GetCounter();
+  StartCounter();
+#endif
+  //prefilter
     m_context->launch( 5, static_cast<unsigned int>(buffer_width), 
         static_cast<unsigned int>(buffer_height));
     m_context->launch( 6, static_cast<unsigned int>(buffer_width),
         static_cast<unsigned int>(buffer_height));
+
+#ifdef WINDOWS_TIME
+if(m_frame > 10)
+	timings[1] += GetCounter();
+	StartCounter();
 #endif
+	//indirect
   m_context->launch( 1, static_cast<unsigned int>(buffer_width),
       static_cast<unsigned int>(buffer_height));
+#ifdef WINDOWS_TIME
+if(m_frame > 10)
+  timings[2] += GetCounter();
+  StartCounter();
+#endif
+  //filter
     m_context->launch( 2, static_cast<unsigned int>(buffer_width), 
         static_cast<unsigned int>(buffer_height));
     m_context->launch( 3, static_cast<unsigned int>(buffer_width), 
         static_cast<unsigned int>(buffer_height));
+#ifdef WINDOWS_TIME
+if(m_frame > 10)
+	timings[3] += GetCounter();
+#endif
+	//display
   m_context->launch( 4, static_cast<unsigned int>(buffer_width), 
       static_cast<unsigned int>(buffer_height));
+
+  if (m_frame > NUM_FRAMES_TIME)
+  {
+	  std::cout << "Direct sampling: " << (double)timings[0]/(m_frame-10) << " ms" << std::endl;
+	  std::cout << "Prefiltering: " << (double)timings[1]/(m_frame-10) << " ms" << std::endl;
+	  std::cout << "Indirect sampling: " << (double)timings[2]/(m_frame-10) << " ms" << std::endl;
+	  std::cout << "Filtering: " << (double)timings[3]/(m_frame-10) << " ms" << std::endl;
+  }
 
 }
 #else
@@ -981,7 +1053,7 @@ void GIScene::createSceneCornell2(InitialCameraData& camera_data)
   light_buffer->setSize( 1u );
   memcpy( light_buffer->map(), &light, sizeof( light ) );
   light_buffer->unmap();
-  m_context["lights"]->setBuffer( light_buffer );
+  m_context["lights"]->setBuffer( light_buffer );//
   // Set up material
   Material diffuse = m_context->createMaterial();
   Material diffuse2 = m_context->createMaterial();
@@ -1176,7 +1248,7 @@ void GIScene::createSceneSponza(InitialCameraData& camera_data)
   
   m_context["top_object"]->set( conference_geom_group );
   m_context["top_shadower"]->set( conference_geom_group );
-  m_context["imp_samp_scale_diffuse"]->setFloat(0.3f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
   m_context["imp_samp_scale_specular"]->setFloat(0.f);
 
 }
@@ -1293,6 +1365,148 @@ void GIScene::createSceneCornell3(InitialCameraData& camera_data)
   m_context["spp_mu"]->setFloat(1.f);
   m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
   m_context["imp_samp_scale_specular"]->setFloat(0.1f);
+}
+
+
+void GIScene::createSceneCornell4(InitialCameraData& camera_data)
+{
+	m_use_textures = false;
+	// Set up camera
+	const float vfov = 35.f;
+
+	camera_data = InitialCameraData( 
+		make_float3( 278.0f, 550.0f, -700.0f ), // eye
+		make_float3( 278.0f, 273.0f, 0.0f ),    // lookat
+		make_float3( 0.0f, 1.0f,  0.0f ),       // up
+		35.0f );         // vfov
+
+
+
+	// Light buffer
+	ParallelogramLight light;
+	light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
+	light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
+	light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
+	light.normal   = normalize( cross(light.v1, light.v2) );
+	light.emission = make_float3( 15.0f, 15.0f, 5.0f );
+
+	Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
+	light_buffer->setFormat( RT_FORMAT_USER );
+	light_buffer->setElementSize( sizeof( ParallelogramLight ) );
+	light_buffer->setSize( 1u );
+	memcpy( light_buffer->map(), &light, sizeof( light ) );
+	light_buffer->unmap();
+	m_context["lights"]->setBuffer( light_buffer );
+	// Set up material
+	Material diffuse = m_context->createMaterial();
+	Material diffuse2 = m_context->createMaterial();
+	Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+		"aaf_gi.cu" ), "shadow" );
+	Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+		"aaf_gi.cu" ), "closest_hit_direct" );
+	diffuse->setClosestHitProgram( 2, diffuse_p );
+	diffuse->setAnyHitProgram( 1, diffuse_ah );
+	diffuse2->setClosestHitProgram( 2, diffuse_p );
+	diffuse2->setAnyHitProgram( 1, diffuse_ah );
+
+	//dummy texture maps
+	diffuse["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
+		make_float3( 0.2f, 0.2f, 0.2f ) ) );
+	diffuse["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
+		make_float3( 0.8f, 0.8f, 0.8f ) ) );
+	diffuse["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
+		make_float3( 0.0f, 0.0f, 0.0f ) ) );
+	diffuse["Kd"]->setFloat(0.1,0.5,0.6);
+	diffuse["Ks"]->setFloat(0.,0.,0.);
+	diffuse["phong_exp"]->setFloat(1.);
+	diffuse2["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
+		make_float3( 0.0f, 0.0f, 0.0f ) ) );
+	diffuse2["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
+		make_float3( 0.0f, 0.0f, 0.0f ) ) );
+	diffuse2["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
+		make_float3( 0.0f, 0.0f, 0.0f ) ) );
+
+	diffuse2["Kd"]->setFloat(0.5,0.5,0.5);
+	diffuse2["Ks"]->setFloat(0.0,0.0,0.0);
+	diffuse2["phong_exp"]->setFloat(10.);
+
+	// Set up parallelogram programs
+	std::string ptx_path = ptxpath( "aaf_gi", "parallelogram.cu" );
+	m_pgram_bounding_box = m_context->createProgramFromPTXFile( ptx_path, 
+		"bounds" );
+	m_pgram_intersection = m_context->createProgramFromPTXFile( ptx_path, 
+		"intersect" );
+
+
+	// create geometry instances
+	std::vector<GeometryInstance> gis;
+
+	const float3 white = make_float3( .8f, .8f, .8f );
+	const float3 dark = make_float3( .3f, .3f, .3f );
+	const float3 green = make_float3( 0.1f, .8f, 0.1f );
+	const float3 red   = make_float3( 0.8, 0.1f, 0.1f );
+	const float3 light_em = make_float3( 15.0f, 15.0f, 15.0f );
+
+	// Floor
+	gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+		make_float3( 0.0f, 0.0f, 559.2f ),
+		make_float3( 556.0f, 0.0f, 0.0f ) ) );
+	//setMaterial(gis.back(), diffuse, "Ks", 2*white);
+	setMaterial(gis.back(), diffuse, "Kd", white);
+
+	// Ceiling
+	gis.push_back( createParallelogram( make_float3( 0.0f, 548.8f, 0.0f ),
+		make_float3( 556.0f, 0.0f, 0.0f ),
+		make_float3( 0.0f, 0.0f, 559.2f ) ) );
+	setMaterial(gis.back(), diffuse, "Kd", white);
+
+	// Back wall
+	gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 559.2f),
+		make_float3( 0.0f, 548.8f, 0.0f),
+		make_float3( 556.0f, 0.0f, 0.0f) ) );
+	setMaterial(gis.back(), diffuse, "Kd", white);
+
+	// Right wall
+	gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+		make_float3( 0.0f, 548.8f, 0.0f ),
+		make_float3( 0.0f, 0.0f, 559.2f ) ) );
+	setMaterial(gis.back(), diffuse, "Kd", green);
+
+	// Left wall
+	gis.push_back( createParallelogram( make_float3( 556.0f, 0.0f, 0.0f ),
+		make_float3( 0.0f, 0.0f, 559.2f ),
+		make_float3( 0.0f, 548.8f, 0.0f ) ) );
+	setMaterial(gis.back(), diffuse, "Kd", red);
+
+	GeometryGroup geom_group = m_context->createGeometryGroup(gis.begin(), 
+		gis.end());
+	Matrix4x4 dragon_xform = Matrix4x4::translate(make_float3(370,0,270)) 
+		* Matrix4x4::rotate(M_PI + M_PI/3,make_float3(0,1,0))
+		* Matrix4x4::scale(make_float3(28,28,28));
+
+	std::string objpath = std::string( sutilSamplesDir() ) +
+		"/gi_research2/data/dragon.obj";
+	ObjLoader * dragon_loader = new ObjLoader( objpath.c_str(), m_context, 
+		geom_group, diffuse, true );
+	dragon_loader->load(dragon_xform);
+
+	Matrix4x4 elephant_xform = Matrix4x4::translate(make_float3(150,0,270))	
+		* Matrix4x4::rotate(M_PI-M_PI/8,make_float3(0,-1,0))
+		* Matrix4x4::scale(make_float3(0.35,0.35,0.35));
+
+	objpath = std::string( sutilSamplesDir() ) + 
+		"/gi_research2/data/elephant.obj";
+	ObjLoader * elephant_loader = new ObjLoader( objpath.c_str(), m_context, 
+		geom_group, diffuse2, true );
+	elephant_loader->load(elephant_xform);
+
+	// Declare these so validation will pass
+	m_context["vfov"]->setFloat( vfov );
+	m_context["top_object"]->set( geom_group );
+	m_context["top_shadower"]->set( geom_group );
+	m_context["spp_mu"]->setFloat(1.f);
+	m_context["imp_samp_scale_diffuse"]->setFloat(1.f);
+	m_context["imp_samp_scale_specular"]->setFloat(0.f);
 }
 
 //-----------------------------------------------------------------------------
