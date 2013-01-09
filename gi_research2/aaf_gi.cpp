@@ -16,10 +16,11 @@
 // 3: Cornell box 2 (Soham's w/ objs)
 // 4: Cornell box 3 (Glossy defined by obj)
 // 5: Sibenik
-#define SCENE 1
+#define SCENE 3
 
 //number of maximum samples per pixel
 #define MAX_SPP 100
+#define MAX_SPEC_SPP 50
 //#define MAX_SPP 25
 
 //depth of indirect bounces
@@ -32,12 +33,13 @@
 #define GT_SAMPLES_SQRT 64
 
 //default width, height
-//#define WIDTH 640u
-//#define HEIGHT 480u
-#define WIDTH 512u
-#define HEIGHT 512u
+#define WIDTH 640u
+#define HEIGHT 480u
+//#define WIDTH 512u
+//#define HEIGHT 512u
 //#define WIDTH 1024u
 //#define HEIGHT 1024u
+#define WINDOWS_TIME
 
 //=== End config
 
@@ -63,6 +65,32 @@
 #include "helpers.h"
 
 using namespace optix;
+
+#ifdef WINDOWS_TIME
+#include <Windows.h>
+#define NUM_FRAMES_TIME 100.
+double pc_freq = 0.;
+__int64 counter_start = 0;
+double timings [4] = {0., 0., 0., 0.};
+
+void StartCounter()
+{
+LARGE_INTEGER li;
+if(!QueryPerformanceFrequency(&li))
+std::cout << "QueryPerformanceFrequency failed!" << std::endl;
+
+pc_freq = double(li.QuadPart)/1000.0;
+
+QueryPerformanceCounter(&li);
+counter_start = li.QuadPart;
+}
+double GetCounter()
+{
+LARGE_INTEGER li;
+QueryPerformanceCounter(&li);
+return double(li.QuadPart-counter_start)/pc_freq;
+}
+#endif
 
 //-----------------------------------------------------------------------------
 //
@@ -341,6 +369,7 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_first_pass_spb_sqrt = 2;
   m_brute_spb = 1000;
   m_max_spb_pass = MAX_SPP;
+  m_context["max_spb_spec_pass"]->setUint(MAX_SPEC_SPP);
   m_context["first_pass_spb_sqrt"]->setUint(m_first_pass_spb_sqrt);
   m_context["brute_spb"]->setUint(m_brute_spb);
   m_context["max_spb_pass"]->setUint(m_max_spb_pass);
@@ -646,31 +675,63 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 
   if( m_camera_changed ) {
     m_camera_changed = false;
-    m_frame = 1;
+    m_frame = 0;
   }
-
+  
   m_context["frame_number"]->setUint( m_frame++ );
 
+#ifdef WINDOWS_TIME
+  StartCounter();
+#endif
+  //direct
   m_context->launch( 0, static_cast<unsigned int>(buffer_width), 
-      static_cast<unsigned int>(buffer_height));
-  if (m_prefilter_indirect)
-  {
-    m_context->launch( 5, static_cast<unsigned int>(buffer_width), 
-        static_cast<unsigned int>(buffer_height));
-    m_context->launch( 6, static_cast<unsigned int>(buffer_width),
-        static_cast<unsigned int>(buffer_height));
-  }
+	  static_cast<unsigned int>(buffer_height));
+#ifdef WINDOWS_TIME
+  if(m_frame > 10)
+	  timings[0] += GetCounter();
+  StartCounter();
+#endif
+  //prefilter
+  m_context->launch( 5, static_cast<unsigned int>(buffer_width), 
+	  static_cast<unsigned int>(buffer_height));
+  m_context->launch( 6, static_cast<unsigned int>(buffer_width),
+	  static_cast<unsigned int>(buffer_height));
+
+#ifdef WINDOWS_TIME
+  if(m_frame > 10)
+	  timings[1] += GetCounter();
+  StartCounter();
+#endif
+  //indirect
   m_context->launch( 1, static_cast<unsigned int>(buffer_width),
-      static_cast<unsigned int>(buffer_height));
-  if (m_filter_indirect)
-  {
-    m_context->launch( 2, static_cast<unsigned int>(buffer_width), 
-        static_cast<unsigned int>(buffer_height));
-    m_context->launch( 3, static_cast<unsigned int>(buffer_width), 
-        static_cast<unsigned int>(buffer_height));
-  }
+	  static_cast<unsigned int>(buffer_height));
+#ifdef WINDOWS_TIME
+  if(m_frame > 10)
+	  timings[2] += GetCounter();
+  StartCounter();
+#endif
+  //filter
+
+  m_context->launch( 2, static_cast<unsigned int>(buffer_width), 
+	  static_cast<unsigned int>(buffer_height));
+  m_context->launch( 3, static_cast<unsigned int>(buffer_width), 
+	  static_cast<unsigned int>(buffer_height));
+#ifdef WINDOWS_TIME
+  if(m_frame > 10)
+	  timings[3] += GetCounter();
+#endif
+  //display
   m_context->launch( 4, static_cast<unsigned int>(buffer_width), 
-      static_cast<unsigned int>(buffer_height));
+	  static_cast<unsigned int>(buffer_height));
+  //std::cout << "frame: " << m_frame << std::endl;
+
+  if (m_frame > NUM_FRAMES_TIME)
+  {
+	  std::cout << "Direct sampling: " << (double)timings[0]/(m_frame-10) << " ms" << std::endl;
+	  std::cout << "Prefiltering: " << (double)timings[1]/(m_frame-10) << " ms" << std::endl;
+	  std::cout << "Indirect sampling: " << (double)timings[2]/(m_frame-10) << " ms" << std::endl;
+	  std::cout << "Filtering: " << (double)timings[3]/(m_frame-10) << " ms" << std::endl;
+  }
 
 }
 #else
