@@ -268,6 +268,9 @@ void GIScene::initScene( InitialCameraData& camera_data )
 #ifdef DEBUG_BUF
   debug_buf_type = 0;
 #endif
+  //uint mult_gpu_type = RT_BUFFER_OUTPUT;
+  //uint mult_gpu_type = RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL;
+  uint mult_gpu_type = RT_BUFFER_INPUT_OUTPUT;
   //Direct Illumination Buffer
   m_context["direct_illum"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
@@ -276,10 +279,10 @@ void GIScene::initScene( InitialCameraData& camera_data )
   //Indirect Illumination Buffer (Unaveraged RGB, and number of samples is
   // stored in A)
   m_context["indirect_illum"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+      m_context->createBuffer(mult_gpu_type,
         RT_FORMAT_FLOAT3, m_width, m_height));
   m_context["indirect_illum_spec"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+      m_context->createBuffer(mult_gpu_type,
         RT_FORMAT_FLOAT3, m_width, m_height));
 
   //Image-space Kd, Ks buffers
@@ -300,38 +303,38 @@ void GIScene::initScene( InitialCameraData& camera_data )
 
   //Z Distances to nearest contribution of indirect light
   m_context["z_dist"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+      m_context->createBuffer(mult_gpu_type | debug_buf_type,
         RT_FORMAT_FLOAT2, m_width, m_height));
 
   //Image-aligned world-space locations (used for filter weights)
   m_context["world_loc"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+      m_context->createBuffer(mult_gpu_type,
         RT_FORMAT_FLOAT3, m_width, m_height));
 
   //Image-aligned normal vectors
   m_context["n"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+      m_context->createBuffer(mult_gpu_type,
         RT_FORMAT_FLOAT3, m_width, m_height));
 
   //Pixels with first intersection
   m_context["visible"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+      m_context->createBuffer(mult_gpu_type,
         RT_FORMAT_BYTE, m_width, m_height));
 
   //Depth buffer
   m_context["depth"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+      m_context->createBuffer(mult_gpu_type,
         RT_FORMAT_FLOAT, m_width, m_height));
 
   //Intermediate buffers to keep between passes
   m_context["z_dist_filter1d"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+      m_context->createBuffer(mult_gpu_type,
         RT_FORMAT_FLOAT2, m_width, m_height));
   m_context["indirect_illum_filter1d"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+      m_context->createBuffer(mult_gpu_type,
         RT_FORMAT_FLOAT3, m_width, m_height));
   m_context["indirect_illum_spec_filter1d"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+      m_context->createBuffer(mult_gpu_type,
         RT_FORMAT_FLOAT3, m_width, m_height));
 
   //spp buffer

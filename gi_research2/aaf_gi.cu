@@ -745,6 +745,7 @@ RT_PROGRAM void indirect_filter_second_pass()
   int radius = clampVal( 2.f*cur_zmin/(spp_mu*OHMAX*proj_dist) , 1.f, MAX_FILT_RADIUS);
   
   z_dist[launch_index].y = radius;	//SCREEN SPACE RADIUS
+  radius = 10u;
 
   if (visible[launch_index])
     for (int i = -radius; i < radius; ++i)
@@ -910,6 +911,8 @@ RT_PROGRAM void display()
             indirect_illum_spec_combined,1);
     }
 
+		output_buffer[launch_index] = make_float4(
+		indirect_illum_filter1d[launch_index]);
   }
 
 }
