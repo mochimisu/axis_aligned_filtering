@@ -7,7 +7,7 @@
 //=== Configuration
 
 // Enable debug buffers (for stats and additional views)
-#define DEBUG_BUF
+//#define DEBUG_BUF
 
 // Choose scene:
 // 0: Cornell box
@@ -70,9 +70,10 @@ using namespace optix;
 #ifdef WINDOWS_TIME
 #include <Windows.h>
 #define NUM_FRAMES_TIME 100.
+#define NUM_BUFFER_FRAMES 10u
 double pc_freq = 0.;
 __int64 counter_start = 0;
-double timings [4] = {0., 0., 0., 0.};
+double timings [5] = {0., 0., 0., 0., 0.};
 
 void StartCounter()
 {
@@ -195,7 +196,7 @@ int output_num = 0;
 void GIScene::initScene( InitialCameraData& camera_data )
 {
   m_context->setRayTypeCount( 5 );
-  m_context->setEntryPointCount( 7 );
+  m_context->setEntryPointCount( 4 );
   m_context->setStackSize( 1800 );
 
   m_context["scene_epsilon"]->setFloat( 0.01f );
@@ -231,33 +232,18 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context["sampling_stategy"]->setInt(m_sampling_strategy);
 
   // AAF programs
-  Program direct_z_sample_prog = m_context->createProgramFromPTXFile(
-      ptx_path, "sample_direct_z");
-  Program sample_indirect_prog = m_context->createProgramFromPTXFile(
-      ptx_path, "sample_indirect");
-  Program sample_indirect_gt_prog = m_context->createProgramFromPTXFile(
-      ptx_path, "sample_indirect_gt");
+  Program sample_prog = m_context->createProgramFromPTXFile(
+      ptx_path, "sample_aaf");
   Program ind_filt_first_prog = m_context->createProgramFromPTXFile(
       ptx_path, "indirect_filter_first_pass");
   Program ind_filt_second_prog = m_context->createProgramFromPTXFile(
       ptx_path, "indirect_filter_second_pass");
   Program display_prog = m_context->createProgramFromPTXFile(
       ptx_path, "display");
-  Program ind_prefilt_first_prog = m_context->createProgramFromPTXFile(
-      ptx_path, "indirect_prefilter_first_pass");
-  Program ind_prefilt_second_prog = m_context->createProgramFromPTXFile(
-      ptx_path, "indirect_prefilter_second_pass");
-  m_context->setRayGenerationProgram( 0, direct_z_sample_prog );
-#ifdef GROUNDTRUTH
-  m_context->setRayGenerationProgram( 1, sample_indirect_gt_prog );
-#else
-  m_context->setRayGenerationProgram( 1, sample_indirect_prog );
-#endif
-  m_context->setRayGenerationProgram( 2, ind_filt_first_prog );
-  m_context->setRayGenerationProgram( 3, ind_filt_second_prog );
-  m_context->setRayGenerationProgram( 4, display_prog );
-  m_context->setRayGenerationProgram( 5, ind_prefilt_first_prog );
-  m_context->setRayGenerationProgram( 6, ind_prefilt_second_prog );
+  m_context->setRayGenerationProgram( 0, sample_prog );
+  m_context->setRayGenerationProgram( 1, ind_filt_first_prog );
+  m_context->setRayGenerationProgram( 2, ind_filt_second_prog );
+  m_context->setRayGenerationProgram( 3, display_prog );
 
   m_context["direct_ray_type"]->setUint(3u);
   m_context["indirect_ray_type"]->setUint(4u);
@@ -269,20 +255,23 @@ void GIScene::initScene( InitialCameraData& camera_data )
   debug_buf_type = 0;
 #endif
   //uint mult_gpu_type = RT_BUFFER_OUTPUT;
-  //uint mult_gpu_type = RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL;
-  uint mult_gpu_type = RT_BUFFER_INPUT_OUTPUT;
+  uint mult_gpu_type = RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL;
+  uint input_type = RT_BUFFER_INPUT;
+  uint output_type = RT_BUFFER_OUTPUT;
+
+  //input_type = output_type = RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL;
+  //uint mult_gpu_type = RT_BUFFER_INPUT_OUTPUT;
   //Direct Illumination Buffer
   m_context["direct_illum"]->set(
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT3, m_width, m_height));
 
-  //Indirect Illumination Buffer (Unaveraged RGB, and number of samples is
-  // stored in A)
+  //Indirect Illumination Buffer
   m_context["indirect_illum"]->set(
-      m_context->createBuffer(mult_gpu_type,
+      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT3, m_width, m_height));
   m_context["indirect_illum_spec"]->set(
-      m_context->createBuffer(mult_gpu_type,
+      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT3, m_width, m_height));
 
   //Image-space Kd, Ks buffers
@@ -296,74 +285,46 @@ void GIScene::initScene( InitialCameraData& camera_data )
       m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
         RT_FORMAT_FLOAT, m_width, m_height));
 
-  //Target SPP
-  m_context["target_indirect_spp"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
-        RT_FORMAT_FLOAT, m_width, m_height));
-
-  //Z Distances to nearest contribution of indirect light
-  m_context["z_dist"]->set(
-      m_context->createBuffer(mult_gpu_type | debug_buf_type,
-        RT_FORMAT_FLOAT2, m_width, m_height));
-
-  //Image-aligned world-space locations (used for filter weights)
-  m_context["world_loc"]->set(
-      m_context->createBuffer(mult_gpu_type,
-        RT_FORMAT_FLOAT3, m_width, m_height));
-
-  //Image-aligned normal vectors
-  m_context["n"]->set(
-      m_context->createBuffer(mult_gpu_type,
-        RT_FORMAT_FLOAT3, m_width, m_height));
-
-  //Pixels with first intersection
-  m_context["visible"]->set(
-      m_context->createBuffer(mult_gpu_type,
-        RT_FORMAT_BYTE, m_width, m_height));
-
-  //Depth buffer
-  m_context["depth"]->set(
-      m_context->createBuffer(mult_gpu_type,
-        RT_FORMAT_FLOAT, m_width, m_height));
 
   //Intermediate buffers to keep between passes
-  m_context["z_dist_filter1d"]->set(
-      m_context->createBuffer(mult_gpu_type,
-        RT_FORMAT_FLOAT2, m_width, m_height));
-  m_context["indirect_illum_filter1d"]->set(
-      m_context->createBuffer(mult_gpu_type,
+  m_context["indirect_illum_filter1d_out"]->set(
+      m_context->createBuffer(output_type,
         RT_FORMAT_FLOAT3, m_width, m_height));
-  m_context["indirect_illum_spec_filter1d"]->set(
-      m_context->createBuffer(mult_gpu_type,
+  m_context["indirect_illum_spec_filter1d_out"]->set(
+      m_context->createBuffer(output_type,
         RT_FORMAT_FLOAT3, m_width, m_height));
+  m_context["indirect_illum_filter1d_in"]->set(
+	  m_context->createBuffer(input_type,
+	  RT_FORMAT_FLOAT3, m_width, m_height));
+  m_context["indirect_illum_spec_filter1d_in"]->set(
+	  m_context->createBuffer(input_type,
+	  RT_FORMAT_FLOAT3, m_width, m_height));
+
+  Buffer finfo_out_buf = m_context->createBuffer(output_type,
+	  RT_FORMAT_USER, m_width, m_height);
+  Buffer finfo_in_buf = m_context->createBuffer(input_type,
+	  RT_FORMAT_USER, m_width, m_height);
+  finfo_out_buf->setElementSize(sizeof(filter_info));
+  finfo_in_buf->setElementSize(sizeof(filter_info));
+  m_context["filter_info_out"]->set(finfo_out_buf);
+  m_context["filter_info_in"]->set(finfo_in_buf);
+
 
   //spp buffer
   m_context["target_spb"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+      m_context->createBuffer(output_type,
         RT_FORMAT_FLOAT, m_width, m_height));
   m_context["target_spb_theoretical"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+      m_context->createBuffer(output_type,
         RT_FORMAT_FLOAT, m_width, m_height));
 
   m_context["target_spb_spec"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+      m_context->createBuffer(output_type,
         RT_FORMAT_FLOAT, m_width, m_height));
   m_context["target_spb_spec_theoretical"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+      m_context->createBuffer(output_type,
         RT_FORMAT_FLOAT, m_width, m_height));
 
-  //prefiltering buffers
-  m_context["prefilter_rejected"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
-        RT_FORMAT_INT2, m_width, m_height));
-  m_context["prefilter_rejected_filter1d"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
-        RT_FORMAT_INT2, m_width, m_height));
-
-  //specular omegavmax buffer
-  m_context["spec_wvmax"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
-        RT_FORMAT_FLOAT, m_width, m_height));
 
 
   //View Mode for displaying different buffers
@@ -591,9 +552,6 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
       return true;
     case 'v':
     case 'V':
-#ifndef DEBUG_BUF
-      std::cout << "SPP Values: Please turn on debug buffers" << std::endl;
-#endif
       {
         Buffer buffer = m_context["output_buffer"]->getBuffer();
         RTsize buffer_width, buffer_height;
@@ -628,7 +586,7 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
 
             min_spb = min(min_spb, cur_spb_theo_val);
             max_spb = max(max_spb, cur_spb_theo_val);
-            average_spb += cur_spb_val;
+            average_spb += cur_spb_theo_val;
 
             min_clamped_spb = min(min_clamped_spb, cur_spb_val);
             max_clamped_spb = max(max_clamped_spb, cur_spb_val);
@@ -694,50 +652,76 @@ void GIScene::trace( const RayGenCameraData& camera_data )
   m_context->launch( 0, static_cast<unsigned int>(buffer_width), 
 	  static_cast<unsigned int>(buffer_height));
 #ifdef WINDOWS_TIME
-  if(m_frame > 10)
+  if(m_frame > NUM_BUFFER_FRAMES)
 	  timings[0] += GetCounter();
   StartCounter();
 #endif
-  //prefilter
-  m_context->launch( 5, static_cast<unsigned int>(buffer_width), 
-	  static_cast<unsigned int>(buffer_height));
-  m_context->launch( 6, static_cast<unsigned int>(buffer_width),
-	  static_cast<unsigned int>(buffer_height));
 
+  /* test code to copy stuff between input output buffers */
+  //TODO: cudaMemcpyPeer
+  Buffer finfo_in_buf = m_context["filter_info_in"]->getBuffer();
+  Buffer finfo_out_buf = m_context["filter_info_out"]->getBuffer();
+
+  RTsize buf_w, buf_h;
+  finfo_in_buf->getSize(buf_w, buf_h);
+
+  float * finfo_in_buf_vals = reinterpret_cast<float*>(finfo_in_buf->map());
+  float * finfo_out_buf_vals = reinterpret_cast<float*>(finfo_out_buf->map());
+
+  memcpy(finfo_in_buf_vals, finfo_out_buf_vals, sizeof(filter_info)*buf_w*buf_h);
+
+  finfo_in_buf->unmap();
+  finfo_out_buf->unmap();
 #ifdef WINDOWS_TIME
-  if(m_frame > 10)
+  if(m_frame > NUM_BUFFER_FRAMES)
 	  timings[1] += GetCounter();
   StartCounter();
 #endif
-  //indirect
-  m_context->launch( 1, static_cast<unsigned int>(buffer_width),
+
+  m_context->launch( 1, static_cast<unsigned int>(buffer_width), 
 	  static_cast<unsigned int>(buffer_height));
 #ifdef WINDOWS_TIME
-  if(m_frame > 10)
+  if(m_frame > NUM_BUFFER_FRAMES)
 	  timings[2] += GetCounter();
   StartCounter();
 #endif
-  //filter
 
+  Buffer dif_filt1d_in_buf = m_context["indirect_illum_filter1d_in"]->getBuffer();
+  Buffer dif_filt1d_out_buf = m_context["indirect_illum_filter1d_out"]->getBuffer();
+  float * dif_filt1d_in_buf_vals = reinterpret_cast<float*>(dif_filt1d_in_buf->map());
+  float * dif_filt1d_out_buf_vals = reinterpret_cast<float*>(dif_filt1d_out_buf->map());
+
+  memcpy(dif_filt1d_in_buf_vals, dif_filt1d_out_buf_vals, sizeof(float3)*buf_w*buf_h);
+
+  dif_filt1d_in_buf->unmap();
+  dif_filt1d_out_buf->unmap();
+#ifdef WINDOWS_TIME
+  if(m_frame > NUM_BUFFER_FRAMES)
+	  timings[3] += GetCounter();
+  StartCounter();
+#endif
   m_context->launch( 2, static_cast<unsigned int>(buffer_width), 
 	  static_cast<unsigned int>(buffer_height));
-  m_context->launch( 3, static_cast<unsigned int>(buffer_width), 
-	  static_cast<unsigned int>(buffer_height));
 #ifdef WINDOWS_TIME
-  if(m_frame > 10)
-	  timings[3] += GetCounter();
+  if(m_frame > NUM_BUFFER_FRAMES)
+	  timings[4] += GetCounter();
 #endif
   //display
-  m_context->launch( 4, static_cast<unsigned int>(buffer_width), 
+  m_context->launch( 3, static_cast<unsigned int>(buffer_width), 
 	  static_cast<unsigned int>(buffer_height));
   //std::cout << "frame: " << m_frame << std::endl;
 
   if (m_frame > NUM_FRAMES_TIME)
   {
-	  std::cout << "Direct sampling: " << (double)timings[0]/(m_frame-10) << " ms" << std::endl;
-	  std::cout << "Prefiltering: " << (double)timings[1]/(m_frame-10) << " ms" << std::endl;
-	  std::cout << "Indirect sampling: " << (double)timings[2]/(m_frame-10) << " ms" << std::endl;
-	  std::cout << "Filtering: " << (double)timings[3]/(m_frame-10) << " ms" << std::endl;
+	  std::cout << "=====================" << std::endl;
+	  std::cout << "Sampling: " << (double)timings[0]/(m_frame-NUM_BUFFER_FRAMES) << " ms" << std::endl;
+	  std::cout << "Total filter time: " << (double)(timings[2]+timings[4])/(m_frame-NUM_BUFFER_FRAMES) << " ms" << std::endl;
+	  std::cout << "Total Memcpy time: " << (double)(timings[1]+timings[3])/(m_frame-NUM_BUFFER_FRAMES) << " ms" << std::endl;
+	  std::cout << "---" << std::endl;
+	  std::cout << "Scene Information Memcpy: " << (double)timings[1]/(m_frame-NUM_BUFFER_FRAMES) << " ms" << std::endl;
+	  std::cout << "Filter First Pass: " << (double)timings[2]/(m_frame-NUM_BUFFER_FRAMES) << " ms" << std::endl;
+	  std::cout << "Filter Information Memcpy: " << (double)timings[3]/(m_frame-NUM_BUFFER_FRAMES) << " ms" << std::endl;
+	  std::cout << "Filter Second Pass: " << (double)timings[4]/(m_frame-NUM_BUFFER_FRAMES) << " ms" << std::endl;
   }
 
 }
@@ -901,9 +885,9 @@ void GIScene::createSceneSibenik(InitialCameraData& camera_data)
   
   m_context["top_object"]->set( conference_geom_group );
   m_context["top_shadower"]->set( conference_geom_group );
-  m_context["spp_mu"]->setFloat(0.7f);
-  m_context["imp_samp_scale_diffuse"]->setFloat(0.2f);
-  m_context["imp_samp_scale_specular"]->setFloat(0.1f);
+  m_context["spp_mu"]->setFloat(1.f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(1.f);
+  m_context["imp_samp_scale_specular"]->setFloat(1.f);
 }
 
 
@@ -1219,8 +1203,8 @@ void GIScene::createSceneCornell4(InitialCameraData& camera_data)
    // Declare these so validation will pass
   m_context["vfov"]->setFloat( vfov );
   m_context["top_object"]->set( geom_group );
-  m_context["spp_mu"]->setFloat(1.f);
-  m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
+  m_context["spp_mu"]->setFloat(0.8f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(.3f);
   m_context["imp_samp_scale_specular"]->setFloat(0.f);
 }
 
@@ -1385,8 +1369,8 @@ void GIScene::createSceneCornell2(InitialCameraData& camera_data)
   m_context["top_object"]->set( geom_group );
   m_context["top_shadower"]->set( geom_group );
   m_context["spp_mu"]->setFloat(.8f);
-  m_context["imp_samp_scale_diffuse"]->setFloat(0.2f);
-  m_context["imp_samp_scale_specular"]->setFloat(0.1f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(1.f);
+  m_context["imp_samp_scale_specular"]->setFloat(1.f);
 }
 
 
@@ -1449,7 +1433,7 @@ void GIScene::createSceneSponza(InitialCameraData& camera_data)
   
   m_context["top_object"]->set( conference_geom_group );
   m_context["top_shadower"]->set( conference_geom_group );
-  m_context["imp_samp_scale_diffuse"]->setFloat(0.2f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(.2f);
   m_context["imp_samp_scale_specular"]->setFloat(0.f);
 
 }
@@ -1507,8 +1491,8 @@ void GIScene::createSceneConference(InitialCameraData& camera_data)
   
   m_context["top_object"]->set( conference_geom_group );
   m_context["top_shadower"]->set( conference_geom_group );
-  m_context["spp_mu"]->setFloat(.8f);
-  m_context["imp_samp_scale_diffuse"]->setFloat(0.2f);
+  m_context["spp_mu"]->setFloat(1.f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(1.f);
   m_context["imp_samp_scale_specular"]->setFloat(0.f);
 }
 

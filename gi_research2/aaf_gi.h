@@ -21,6 +21,17 @@
 
 #include <optixu/optixu_math_namespace.h>
 
+typedef struct {
+	char valid;
+	optix::float3 indirect_diffuse;
+	optix::float3 indirect_specular;
+	float spec_wvmax;
+	optix::float3 n;
+	optix::float3 world_loc;
+	float zmin;
+	float proj_dist;
+} filter_info;
+
 struct ParallelogramLight
 {
   optix::float3 corner;
