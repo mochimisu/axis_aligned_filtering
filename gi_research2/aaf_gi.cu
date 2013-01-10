@@ -259,6 +259,9 @@ __device__ __inline__ void indirectFilter(
     //TODO: cleanup
 	  filter_info cur_finfo = filter_info_in[target_index];
 
+	  if(!cur_finfo.valid)
+		  return;
+
     float3 target_loc = cur_finfo.world_loc;
     float3 diff = cur_world_loc - target_loc;
     float euclidean_distsq = dot(diff,diff);
@@ -730,6 +733,8 @@ RT_PROGRAM void indirect_filter_second_pass()
           cur_world_loc, cur_n, cur_zmin,
           target_index, buf_size, 1);
     }
+  else
+	  indirect_illum[launch_index] = make_float3(0);
 
   if (sum_weight > 0.0001f)
     indirect_illum[launch_index] = blurred_indirect_sum/sum_weight;
@@ -750,12 +755,13 @@ RT_PROGRAM void indirect_filter_second_pass()
 RT_PROGRAM void display()
 {
 	//output_buffer[launch_index] = make_float4(direct_illum[launch_index]);
-	output_buffer[launch_index] = make_float4(indirect_illum[launch_index]);
 
 	output_buffer[launch_index] = make_float4(
 		direct_illum[launch_index]
 	  + indirect_illum[launch_index] * Kd_image[launch_index]
-	  + indirect_illum_spec[launch_index] * Ks_image[launch_index],1.f);
+	  //+ indirect_illum_spec[launch_index] * Ks_image[launch_index]
+	  ,1.f);
+	  //output_buffer[launch_index] = make_float4(indirect_illum[launch_index]);
 	/*
   float3 indirect_illum_combined = indirect_illum[make_uint2(launch_index.x, 
 	  launch_index.y)];
