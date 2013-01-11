@@ -691,12 +691,12 @@ RT_PROGRAM void indirect_filter_second_pass()
 	if (cur_finfo.valid)
 		for (int i = -radius; i < radius; ++i)
 		{
-			uint2 target_index = make_uint2(launch_index.x+i, launch_index.y);			if (target_index.x > 0 && target_index.x < buf_size.x 
+			uint2 target_index = make_uint2(launch_index.x, launch_index.y+i);			if (target_index.x > 0 && target_index.x < buf_size.x 
 				&& target_index.y > 0 && target_index.y < buf_size.y)
 			{				target_finfo = filter_info_in[target_index];
-				float3 target_indirect = indirect_illum_filter1d_in[launch_index];
+				float3 target_indirect = indirect_illum_filter1d_in[target_index];
 #ifdef FILTER_SPECULAR
-				float3 target_indirect_spec = indirect_illum_spec_filter1d_in[launch_index];
+				float3 target_indirect_spec = indirect_illum_spec_filter1d_in[target_index];
 #endif
 				indirectFilter(
 					cur_finfo, target_finfo, buf_size,
