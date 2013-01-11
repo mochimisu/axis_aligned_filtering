@@ -5,8 +5,8 @@
 #include "random.h"
 
 #define MULTI_BOUNCE
-//#define SAMPLE_SPECULAR
-//#define FILTER_SPECULAR
+#define SAMPLE_SPECULAR
+#define FILTER_SPECULAR
 
 #define MAX_FILT_RADIUS 50.f
 #define OHMAX 2.8f
@@ -486,6 +486,7 @@ RT_PROGRAM void sample_aaf()
 	float Kd_Ks_ratio = Kd_mag/(Kd_mag+Ks_mag);
 	
 	spp = clampVal(spp * Kd_Ks_ratio, 0.f, (float)spp_mu*max_spb_pass);
+	spp = 100;
 	spec_spp = clampVal(spec_spp* (1.f-Kd_Ks_ratio), 
 	0.f, (float) spp_mu*max_spb_spec_pass);
 
@@ -600,7 +601,7 @@ RT_PROGRAM void sample_aaf()
 			rand_samp.y = (((int)samp/spp_spec_sqrt_int) + rand_samp.y)
 				/spp_spec_sqrt_int;
 
-			sampleUnitHemispherePower(rand_samp, rns_u, rns_v, rns_w, cur_phong_exp,
+			sampleUnitHemispherePower(rand_samp, rns_u, rns_v, rns_w, dir_samp.phong_exp,
 				sample_dir);
 
 			Ray ray = make_Ray(ray_origin, sample_dir,
@@ -637,8 +638,8 @@ RT_PROGRAM void sample_aaf()
 			prev_Kd = prd.Kd;
 		}
 #endif
-		incoming_diff_indirect += sample_diffuse_color;
-		incoming_spec_indirect += sample_specular_color;
+		finfo.indirect_diffuse += sample_diffuse_color;
+		finfo.indirect_specular += sample_specular_color;
 	}
 	finfo.indirect_specular /= (float)spp_int+spp_spec_int;
 #else
@@ -698,6 +699,7 @@ RT_PROGRAM void indirect_filter_first_pass()
 		else
 			indirect_illum_spec_filter1d_out[launch_index] = cur_finfo.indirect_specular;
 #endif
+
 }
 RT_PROGRAM void indirect_filter_second_pass()
 {
@@ -759,10 +761,10 @@ RT_PROGRAM void display()
 	output_buffer[launch_index] = make_float4(
 		direct_illum[launch_index]
 	  + indirect_illum[launch_index] * Kd_image[launch_index]
-	  //+ indirect_illum_spec[launch_index] * Ks_image[launch_index]
+	  + indirect_illum_spec[launch_index] * Ks_image[launch_index]
 	  ,1.f);
+	  /*
 	  //output_buffer[launch_index] = make_float4(indirect_illum[launch_index]);
-	/*
   float3 indirect_illum_combined = indirect_illum[make_uint2(launch_index.x, 
 	  launch_index.y)];
   float3 indirect_illum_spec_combined = indirect_illum_spec[

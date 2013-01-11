@@ -17,7 +17,7 @@
 // 4: Cornell box 3 (Glossy defined by obj)
 // 5: Sibenik
 // 6: Cornell box 4 (Soham's w/ objs) (Diffuse)
-#define SCENE 6
+#define SCENE 3
 
 //number of maximum samples per pixel
 #define MAX_SPP 100
@@ -693,7 +693,16 @@ void GIScene::trace( const RayGenCameraData& camera_data )
   memcpy(dif_filt1d_in_buf_vals, dif_filt1d_out_buf_vals, sizeof(float3)*buf_w*buf_h);
 
   dif_filt1d_in_buf->unmap();
-  dif_filt1d_out_buf->unmap();
+  dif_filt1d_out_buf->unmap();
+  Buffer spec_filt1d_in_buf = m_context["indirect_illum_spec_filter1d_in"]->getBuffer();
+  Buffer spec_filt1d_out_buf = m_context["indirect_illum_spec_filter1d_out"]->getBuffer();
+  float * spec_filt1d_in_buf_vals = reinterpret_cast<float*>(spec_filt1d_in_buf->map());
+  float * spec_filt1d_out_buf_vals = reinterpret_cast<float*>(spec_filt1d_out_buf->map());
+  
+  memcpy(spec_filt1d_in_buf_vals, spec_filt1d_out_buf_vals, sizeof(float3)*buf_w*buf_h);
+  
+  spec_filt1d_in_buf->unmap();
+  spec_filt1d_out_buf->unmap();
 #ifdef WINDOWS_TIME
   if(m_frame > NUM_BUFFER_FRAMES)
 	  timings[3] += GetCounter();
@@ -1271,11 +1280,14 @@ void GIScene::createSceneCornell2(InitialCameraData& camera_data)
         make_float3( 0.0f, 0.0f, 0.0f ) ) );
 
   spec1["Kd"]->setFloat(0.1,0.1,0.4);
-  spec1["Ks"]->setFloat(0.4,0.4,1.6);
+  //spec1["Ks"]->setFloat(0.4,0.4,1.6);
+  spec1["Ks"]->setFloat(0.,0.,0.);
   spec2["Kd"]->setFloat(0.3,0.3,0.3);
-  spec2["Ks"]->setFloat(0.7,0.7,0.7);
+  //spec2["Ks"]->setFloat(0.7,0.7,0.7);
+  spec2["Ks"]->setFloat(0.,0.,0.);
   spec1["phong_exp"]->setFloat(12.);
   spec2["phong_exp"]->setFloat(12.);
+  diffuse["phong_exp"]->setFloat(1.);
 
   // Set up parallelogram programs
   std::string ptx_path = ptxpath( "aaf_gi", "parallelogram.cu" );
@@ -1332,7 +1344,7 @@ void GIScene::createSceneCornell2(InitialCameraData& camera_data)
     
   std::string objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/teapot2.obj";
   ObjLoader * teapot1_loader = new ObjLoader( objpath.c_str(), m_context, geom_group, spec2, true );
-  //teapot1_loader->load(teapot1_xform);
+  teapot1_loader->load(teapot1_xform);
 
   Matrix4x4 vase_xform = Matrix4x4::translate(make_float3(330,0,300))	
     * Matrix4x4::rotate(M_PI-M_PI/8,make_float3(0,-1,0)) * Matrix4x4::scale(make_float3(2,2,2));
