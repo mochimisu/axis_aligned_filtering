@@ -731,10 +731,8 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 	  timings[3] += GetCounter();
 #endif
   //display
-  /*
   m_context->launch( 4, static_cast<unsigned int>(buffer_width), 
 	  static_cast<unsigned int>(buffer_height));
-	  */
   //std::cout << "frame: " << m_frame << std::endl;
 
   if (m_frame > NUM_FRAMES_TIME)
