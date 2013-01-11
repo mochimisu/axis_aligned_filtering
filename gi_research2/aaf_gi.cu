@@ -10,7 +10,7 @@
 
 #define MAX_FILT_RADIUS 50.f
 #define OHMAX 2.8f
-#define MIN_Z_MIN 0.1f
+#define MIN_Z_MIN 15.f
 
 using namespace optix;
 
@@ -478,14 +478,13 @@ RT_PROGRAM void sample_indirect()
   size_t2 screen_size = output_buffer.size();
   float proj_dist = 2./screen_size.y * depth[launch_index] 
     * tan(vfov/2.*M_PI/180.);
-  float alpha = 1;
+  float alpha = 1.f;
   float spp_term1 = OHMAX * spp_mu * proj_dist/cur_zd.x + alpha;
-  float spp_term2 = 1+spp_mu*cur_zd.y/cur_zd.x;
+  float spp_term2 = 1.f+spp_mu*cur_zd.y/cur_zd.x;
 
   float spp = imp_samp_scale_diffuse
 	*spp_term1*spp_term1
     * spp_term2*spp_term2 * OHMAX * OHMAX;
-
 
   float cur_spec_wvmax = spec_wvmax[launch_index];
   float spp_spec_term1 = proj_dist * cur_spec_wvmax/cur_zd.x + alpha;
@@ -788,7 +787,7 @@ RT_PROGRAM void indirect_prefilter_first_pass()
   float proj_dist = 2./screen_size.y * depth[launch_index] * tan(vfov/2.*M_PI/180.);
   int radius = clampVal( 2.f*cur_zmin/(spp_mu*OHMAX*proj_dist) , 1.f, MAX_FILT_RADIUS);
   
-  z_dist[launch_index].y = radius;	//SCREEN SPACE RADIUS
+  //z_dist[launch_index].y = radius;	//SCREEN SPACE RADIUS
 
   if (visible[launch_index])
     for (int i = -radius; i < radius; ++i)
@@ -831,7 +830,7 @@ RT_PROGRAM void indirect_prefilter_second_pass()
   float proj_dist = 2./screen_size.y * depth[launch_index] * tan(vfov/2.*M_PI/180.);
   int radius = clampVal( 2.f*cur_zmin/(spp_mu*OHMAX*proj_dist) , 1.f, MAX_FILT_RADIUS);
   
-  z_dist[launch_index].y = radius;	//SCREEN SPACE RADIUS
+  //z_dist[launch_index].y = radius;	//SCREEN SPACE RADIUS
 
   if (visible[launch_index])
     for (int i = -radius; i < radius; ++i)
