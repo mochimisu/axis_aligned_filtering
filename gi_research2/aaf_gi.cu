@@ -182,29 +182,22 @@ __device__ __inline__ float gaussFilter(float distsq, float wxf)
 }
 
 
+
 __device__ __inline__ bool indirectFilterThresholds(
-    const float3& cur_world_loc,
-    const float3& cur_n,
-    const float cur_zpmin,
-    const uint2& target_index,
+    const filter_info& cur_finfo,
+    const filter_info& target_finfo,
     const size_t2& buf_size)
 {
   const float z_threshold = .7f;
   const float angle_threshold = 5.f * M_PI/180.f;
-  const float dist_threshold_sq = cur_zpmin*cur_zpmin;
+  const float dist_threshold_sq = cur_finfo.zmin*cur_finfo.zmin;
 
-  filter_info target_finfo = filter_info_buf[target_index];
-
-  float target_zpmin = target_finfo.zmin;
-  float3 target_n = target_finfo.n;
-  bool use_filt = target_finfo.valid;
-
-  if (use_filt
-      && abs(acos(dot(target_n, cur_n))) < angle_threshold
+  if (target_finfo.valid
+      && abs(acos(dot(target_finfo.n, cur_finfo.n))) < angle_threshold
      )
   {
     float3 target_loc = target_finfo.world_loc;
-    float3 diff = cur_world_loc - target_loc;
+    float3 diff = cur_finfo.world_loc - target_loc;
     float euclidean_distsq = dot(diff,diff);
 
     if (euclidean_distsq < dist_threshold_sq)
@@ -216,10 +209,16 @@ __device__ __inline__ bool indirectFilterThresholds(
 }
 
 __device__ __inline__ float filterWeight(
-    float proj_distsq, const float3& target_n, const float3& cur_n,
-    float cur_zpmin, float wvmax)
-{
-	float wxf = wvmax*(1.f+50.f*acos(dot(target_n,cur_n)))/cur_zpmin;	
+	const filter_info& cur_finfo,
+	const filter_info& target_finfo,
+    float wvmax)
+{	float3 diff = cur_finfo.world_loc - target_finfo.world_loc;
+	float euclidean_distsq = dot(diff,diff);
+	float rDn = dot(diff, cur_finfo.n);
+	float proj_distsq = euclidean_distsq - rDn*rDn;
+
+	float wxf = wvmax*(1.f+50.f*acos(dot(target_finfo.n,cur_finfo.n)))
+		/cur_finfo.zmin;	
 	float sample = proj_distsq*wxf*wxf*spp_mu*spp_mu;
 	if (sample > 2.f) {
 		return 0.0;
@@ -229,59 +228,30 @@ __device__ __inline__ float filterWeight(
 
 
 __device__ __inline__ void indirectFilter( 
+	const filter_info& cur_finfo,
+	const filter_info& target_finfo,
+	const size_t2& buf_size,
+	const float3& target_indirect,
     float3& blurred_indirect_sum,
-    float& sum_weight,
+    float& sum_weight
 #ifdef FILTER_SPECULAR
-    float3& blurred_indirect_spec_sum,
-    float& sum_weight_spec,
-    const float cur_spec_wvmax,
+	,
+	float3& blurred_indirect_spec_sum,
+	float& sum_weight_spec,
+	const float3& target_indirect_spec
 #endif
-    const float3& cur_world_loc,
-    float3 cur_n,
-    float cur_zpmin,
-    const uint2& target_index,
-    const size_t2& buf_size,
-    unsigned int pass)
+	)
 {
 
-  bool can_filter = false;
-  if (target_index.x > 0 && target_index.x < buf_size.x 
-      && target_index.y > 0 && target_index.y < buf_size.y)
+  if (indirectFilterThresholds(cur_finfo, target_finfo, buf_size))
   {
-    can_filter = indirectFilterThresholds(
-      cur_world_loc, cur_n, cur_zpmin, target_index, buf_size);
-  }
-  if (can_filter)
-  {
-    //TODO: cleanup
-	  filter_info cur_finfo = filter_info_buf[target_index];
-
-	  if(!cur_finfo.valid)
-		  return;
-
-    float3 target_loc = cur_finfo.world_loc;
-    float3 diff = cur_world_loc - target_loc;
-    float euclidean_distsq = dot(diff,diff);
-    float rDn = dot(diff, cur_n);
-    float proj_distsq = euclidean_distsq - rDn*rDn;
-    float3 target_n = cur_finfo.n;
-
-    float diff_weight = filterWeight(proj_distsq, target_n, cur_n, cur_zpmin,
+    float diff_weight = filterWeight(cur_finfo, target_finfo,
         OHMAX);
-    float3 target_indirect = cur_finfo.indirect_diffuse;
 
 #ifdef FILTER_SPECULAR
-	float spec_weight = filterWeight(proj_distsq, target_n, cur_n, cur_zpmin,
-	cur_spec_wvmax);
-	float3 target_indirect_spec = cur_finfo.indirect_specular;
+	float spec_weight = filterWeight(cur_finfo, target_finfo,
+	cur_finfo.spec_wvmax);
 #endif
-    if (pass == 1)
-    {
-      target_indirect = indirect_illum_filter1d[target_index];
-#ifdef FILTER_SPECULAR
-      target_indirect_spec = indirect_illum_spec_filter1d[target_index];
-#endif
-    }
 
     blurred_indirect_sum += diff_weight * target_indirect;
     sum_weight += diff_weight;
@@ -292,7 +262,6 @@ __device__ __inline__ void indirectFilter(
 #endif
   }
 }
-
 
 //Ray Hit Programs
 rtDeclareVariable(PerRayData_direct, prd_direct, rtPayload, );
@@ -655,7 +624,7 @@ RT_PROGRAM void indirect_filter_first_pass()
 {
 	size_t2 buf_size = filter_info_buf.size();
 	filter_info cur_finfo = filter_info_buf[launch_index];
-	float cur_zmin = cur_finfo.zmin;
+	filter_info target_finfo;
 
 	float3 blurred_indirect_sum = make_float3(0.f);
 	float sum_weight = 0.f;
@@ -663,25 +632,26 @@ RT_PROGRAM void indirect_filter_first_pass()
 	float3 blurred_indirect_spec_sum = make_float3(0.f);
 	float sum_weight_spec = 0.f;
 
-	float cur_spec_wvmax = cur_finfo.spec_wvmax;
-
-	float3 cur_world_loc = cur_finfo.world_loc;
-	float3 cur_n = cur_finfo.n;
-
 	float proj_dist = cur_finfo.proj_dist;
-	int radius = clampVal( 2.f*cur_zmin/(spp_mu*OHMAX*proj_dist) , 1.f, MAX_FILT_RADIUS);
+	int radius = clampVal( 2.f*cur_finfo.zmin
+		/(spp_mu*OHMAX*proj_dist) , 1.f, MAX_FILT_RADIUS);
   
 
 	if (cur_finfo.valid)
 		for (int i = -radius; i < radius; ++i)
 		{
-			uint2 target_index = make_uint2(launch_index.x+i, launch_index.y);
-			indirectFilter(blurred_indirect_sum, sum_weight,
+			uint2 target_index = make_uint2(launch_index.x+i, launch_index.y);			if (target_index.x > 0 && target_index.x < buf_size.x 
+				&& target_index.y > 0 && target_index.y < buf_size.y)
+			{				target_finfo = filter_info_buf[target_index];				indirectFilter(
+					cur_finfo, target_finfo, buf_size,
+					target_finfo.indirect_diffuse,
+					blurred_indirect_sum, sum_weight
 #ifdef FILTER_SPECULAR
-				blurred_indirect_spec_sum, sum_weight_spec, cur_spec_wvmax,
+					, blurred_indirect_spec_sum, sum_weight_spec,
+					target_finfo.indirect_specular
 #endif
-				cur_world_loc, cur_n, cur_zmin,
-				target_index, buf_size, 0);
+					);
+			}
 		}
 
 		if (sum_weight > 0.0001f)
@@ -698,11 +668,9 @@ RT_PROGRAM void indirect_filter_first_pass()
 
 }
 RT_PROGRAM void indirect_filter_second_pass()
-{
-  
-	size_t2 buf_size = filter_info_buf.size();
+{	size_t2 buf_size = filter_info_buf.size();
 	filter_info cur_finfo = filter_info_buf[launch_index];
-	float cur_zmin = cur_finfo.zmin;
+	filter_info target_finfo;
 
 	float3 blurred_indirect_sum = make_float3(0.f);
 	float sum_weight = 0.f;
@@ -710,45 +678,48 @@ RT_PROGRAM void indirect_filter_second_pass()
 	float3 blurred_indirect_spec_sum = make_float3(0.f);
 	float sum_weight_spec = 0.f;
 
-	float cur_spec_wvmax = cur_finfo.spec_wvmax;
-
-	float3 cur_world_loc = cur_finfo.world_loc;
-	float3 cur_n = cur_finfo.n;
-
 	float proj_dist = cur_finfo.proj_dist;
-	int radius = clampVal( 2.f*cur_zmin/(spp_mu*OHMAX*proj_dist) , 1.f, MAX_FILT_RADIUS);
+	int radius = clampVal( 2.f*cur_finfo.zmin
+		/(spp_mu*OHMAX*proj_dist) , 1.f, MAX_FILT_RADIUS);
 
-  
-  if (cur_finfo.valid)
- 
-    for (int i = -radius; i < radius; ++i)
-	  {
-      uint2 target_index = make_uint2(launch_index.x, launch_index.y+i);
-      indirectFilter(blurred_indirect_sum, sum_weight,
+
+	if (cur_finfo.valid)
+		for (int i = -radius; i < radius; ++i)
+		{
+			uint2 target_index = make_uint2(launch_index.x+i, launch_index.y);			if (target_index.x > 0 && target_index.x < buf_size.x 
+				&& target_index.y > 0 && target_index.y < buf_size.y)
+			{				target_finfo = filter_info_buf[target_index];
+				float3 target_indirect = indirect_illum_filter1d[launch_index];
 #ifdef FILTER_SPECULAR
-          blurred_indirect_spec_sum, sum_weight_spec, cur_spec_wvmax,
+				float3 target_indirect_spec = indirect_illum_spec_filter1d[launch_index];
 #endif
-          cur_world_loc, cur_n, cur_zmin,
-          target_index, buf_size, 1);
-    }
-  else
-	  indirect_illum[launch_index] = make_float3(0);
-
-  if (sum_weight > 0.0001f)
-    indirect_illum[launch_index] = blurred_indirect_sum/sum_weight;
-  else
-    indirect_illum[launch_index] = indirect_illum_filter1d[launch_index];
+				indirectFilter(
+					cur_finfo, target_finfo, buf_size,
+					target_indirect,
+					blurred_indirect_sum, sum_weight
 #ifdef FILTER_SPECULAR
-  if (sum_weight_spec > 0.0001f)
-    indirect_illum_spec[launch_index] = blurred_indirect_spec_sum
-      /sum_weight_spec;
-  else
-    indirect_illum_spec[launch_index] = 
-      indirect_illum_spec_filter1d[launch_index];
+					, blurred_indirect_spec_sum, sum_weight_spec,
+					target_indirect_spec
+#endif
+					);			}
+		}
+	else
+		indirect_illum[launch_index] = make_float3(0);
+
+	if (sum_weight > 0.0001f)
+		indirect_illum[launch_index] = blurred_indirect_sum/sum_weight;
+	else
+		indirect_illum[launch_index] = indirect_illum_filter1d[launch_index];
+#ifdef FILTER_SPECULAR
+	if (sum_weight_spec > 0.0001f)
+		indirect_illum_spec[launch_index] = blurred_indirect_spec_sum
+		/sum_weight_spec;
+	else
+		indirect_illum_spec[launch_index] = 
+		indirect_illum_spec_filter1d[launch_index];
 #endif
 
 }
-
 
 RT_PROGRAM void display()
 {
