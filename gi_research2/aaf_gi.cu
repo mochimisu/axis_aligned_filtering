@@ -509,9 +509,9 @@ RT_PROGRAM void sample_indirect()
 
   spp = max(
       min(spp / (1.f-(float)pf_rej.x/pf_rej.y), 
-        (float)max_spb_pass),
+        (float)max_spb_pass*spp_mu),
       1.f) * Kd_Ks_ratio;
-  spec_spp = max( min(spp, (float)max_spb_spec_pass), 1.f)
+  spec_spp = max( min(spp, (float)max_spb_spec_pass*spp_mu), 1.f)
     *(1.f-Kd_Ks_ratio); 
   //TODO: distribute samples according to kd to ks ratio, account for prefilt
 
