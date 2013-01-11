@@ -17,7 +17,7 @@
 // 4: Cornell box 3 (Glossy defined by obj)
 // 5: Sibenik
 // 6: Cornell box 4 (Soham's w/ objs) (Diffuse)
-#define SCENE 6
+#define SCENE 2
 
 //number of maximum samples per pixel
 #define MAX_SPP 100
@@ -26,12 +26,6 @@
 
 //depth of indirect bounces
 #define INDIRECT_BOUNCES 1
-
-//enable GT mode
-//#define GROUNDTRUTH
-
-//64 = 4096 samples
-#define GT_SAMPLES_SQRT 64
 
 //default width, height
 #define WIDTH 640u
@@ -184,10 +178,6 @@ private:
   bool m_filter_indirect;
   bool m_prefilter_indirect;
   bool m_filter_z;
-
-#ifdef GROUNDTRUTH
-  int m_gt_total_pass;
-#endif
 };
 
 GIScene scene;
@@ -211,9 +201,6 @@ void GIScene::initScene( InitialCameraData& camera_data )
   Buffer buffer = createOutputBuffer( RT_FORMAT_FLOAT4, m_width, m_height );
   output_buffer->set(buffer);
 
-
-
-  m_context["sqrt_num_samples"]->setUint( m_sqrt_num_samples );
   m_context["bad_color"]->setFloat( 0.0f, 1.0f, 0.0f );
   m_context["bg_color"]->setFloat( make_float3(0.0f) );
 
@@ -226,10 +213,6 @@ void GIScene::initScene( InitialCameraData& camera_data )
         "miss" ) );
 
   m_context["frame_number"]->setUint(1);
-
-   // Index of sampling_stategy (BSDF, light, MIS)
-  m_sampling_strategy = 0;
-  m_context["sampling_stategy"]->setInt(m_sampling_strategy);
 
   // AAF programs
   Program sample_prog = m_context->createProgramFromPTXFile(
@@ -332,16 +315,12 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context["view_mode"]->setUint(m_view_mode);
 
   //SPP Settings
-  m_first_pass_spb_sqrt = 2;
-  m_brute_spb = 1000;
+  m_first_pass_spb_sqrt = 4;
   m_max_spb_pass = MAX_SPP;
   m_context["max_spb_spec_pass"]->setUint(MAX_SPEC_SPP);
   m_context["first_pass_spb_sqrt"]->setUint(m_first_pass_spb_sqrt);
-  m_context["brute_spb"]->setUint(m_brute_spb);
   m_context["max_spb_pass"]->setUint(m_max_spb_pass);
-  m_context["z_filter_radius"]->setInt(2);
   m_context["indirect_ray_depth"]->setUint(INDIRECT_BOUNCES);
-  m_context["pixel_radius"]->setInt(10);
 
   //toggle settings
   m_filter_indirect = true;
@@ -375,16 +354,6 @@ void GIScene::initScene( InitialCameraData& camera_data )
   
 
   m_context["use_textures"]->setUint(m_use_textures);
-
-#ifdef GROUNDTRUTH
-  m_context["total_gt_samples_sqrt"]->setUint(GT_SAMPLES_SQRT);
-  m_context["gt_samples_per_pass"]->setUint(MAX_SPP);
-  m_context["gt_pass"]->setUint(0);
-  int num_passes = (uint)ceil((float)GT_SAMPLES_SQRT*GT_SAMPLES_SQRT/MAX_SPP);
-  m_context["gt_total_pass"]->setUint(num_passes);
-  m_gt_total_pass = num_passes;
-  std::cout << "GT with " << num_passes << " passes" << std::endl;
-#endif
 
   // Finalize
   m_context->validate();
@@ -626,7 +595,7 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
   return false;
 }
 
-#ifndef GROUNDTRUTH
+
 void GIScene::trace( const RayGenCameraData& camera_data )
 {
   m_context["eye"]->setFloat( camera_data.eye );
@@ -734,40 +703,6 @@ void GIScene::trace( const RayGenCameraData& camera_data )
   }
 
 }
-#else
-void GIScene::trace( const RayGenCameraData& camera_data )
-{
-  m_context["eye"]->setFloat( camera_data.eye );
-  m_context["U"]->setFloat( camera_data.U );
-  m_context["V"]->setFloat( camera_data.V );
-  m_context["W"]->setFloat( camera_data.W );
-
-  Buffer buffer = m_context["output_buffer"]->getBuffer();
-  RTsize buffer_width, buffer_height;
-  buffer->getSize( buffer_width, buffer_height );
-
-  if( m_camera_changed ) {
-    m_camera_changed = false;
-    m_frame = 1;
-  }
-
-  m_context["frame_number"]->setUint( m_frame++ );
-
-  if (m_frame == 2)
-  {
-    m_context->launch( 0, static_cast<unsigned int>(buffer_width), 
-        static_cast<unsigned int>(buffer_height));
-    for (int i = 0; i < m_gt_total_pass; ++i)
-    {
-      m_context["gt_pass"]->setUint(i);
-      m_context->launch( 3, static_cast<unsigned int>(buffer_width),
-          static_cast<unsigned int>(buffer_height));
-    }
-  }
-  m_context->launch( 6, static_cast<unsigned int>(buffer_width), 
-      static_cast<unsigned int>(buffer_height));
-}
-#endif
 
 
 //-----------------------------------------------------------------------------

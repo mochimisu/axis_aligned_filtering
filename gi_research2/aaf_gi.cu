@@ -127,6 +127,7 @@ rtDeclareVariable(int, pixel_radius, , );
 rtDeclareVariable(uint, use_textures, , );
 rtDeclareVariable(float, spp_mu, , );
 rtDeclareVariable(float, imp_samp_scale_diffuse, ,);
+rtDeclareVariable(uint, first_pass_spb_sqrt, ,);
 
 
 rtDeclareVariable(uint, view_mode, , );
@@ -390,9 +391,8 @@ RT_PROGRAM void sample_aaf()
 	cur_depth = dir_samp.z_dist;
 
 
-	int initial_bucket_samples_sqrt = 4;
-	int initial_bucket_samples = initial_bucket_samples_sqrt
-		* initial_bucket_samples_sqrt;
+	int initial_bucket_samples = first_pass_spb_sqrt
+		* first_pass_spb_sqrt;
 
 
 	float3 n_u, n_v, n_w;
@@ -405,10 +405,10 @@ RT_PROGRAM void sample_aaf()
 		float3 sample_dir;
 		float2 rand_samp = make_float2(rnd(seed),rnd(seed));
 		//stratify x,y
-		rand_samp.x = (samp%initial_bucket_samples_sqrt + rand_samp.x)
-			/initial_bucket_samples_sqrt;
-		rand_samp.y = (((int)samp/initial_bucket_samples_sqrt) + rand_samp.y)
-			/initial_bucket_samples_sqrt;
+		rand_samp.x = (samp%first_pass_spb_sqrt + rand_samp.x)
+			/first_pass_spb_sqrt;
+		rand_samp.y = (((int)samp/first_pass_spb_sqrt) + rand_samp.y)
+			/first_pass_spb_sqrt;
 
 		//dont accept "grazing" angles
 		rand_samp.y *= 0.95f;
@@ -431,6 +431,8 @@ RT_PROGRAM void sample_aaf()
 		* tan(vfov/2.f*M_PI/180.f);
 	finfo.proj_dist = proj_dist;
 	float alpha = 1.f;
+	//what is this for?
+	//cur_zdist.y = clampVal(2.f*cur_zdist.x/(spp_mu*OHMAX*proj_dist), 1.f, MAX_FILT_RADIUS);
 	float spp_term1 = OHMAX * spp_mu * proj_dist/cur_zdist.x + alpha;
 	float spp_term2 = 1.f+spp_mu*cur_zdist.y/cur_zdist.x;
 	
@@ -456,7 +458,7 @@ RT_PROGRAM void sample_aaf()
 	float Kd_Ks_ratio = Kd_mag/(Kd_mag+Ks_mag);
 	
 	spp = clampVal(spp * Kd_Ks_ratio, 0.f, (float)spp_mu*max_spb_pass);
-	spec_spp = clampVal(spec_spp* (1.f-Kd_Ks_ratio), 
+	spec_spp = clampVal(spec_spp * (1.f-Kd_Ks_ratio), 
 	0.f, (float) spp_mu*max_spb_spec_pass);
 
 	float spp_sqrt = sqrt(spp);
