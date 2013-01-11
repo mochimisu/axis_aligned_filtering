@@ -7,7 +7,7 @@
 //=== Configuration
 
 // Enable debug buffers (for stats and additional views)
-//#define DEBUG_BUF
+#define DEBUG_BUF
 
 // Choose scene:
 // 0: Cornell box
@@ -341,17 +341,17 @@ void GIScene::initScene( InitialCameraData& camera_data )
 
   //spp buffer
   m_context["target_spb"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+      m_context->createBuffer(RT_BUFFER_OUTPUT | debug_buf_type,
         RT_FORMAT_FLOAT, m_width, m_height));
   m_context["target_spb_theoretical"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+      m_context->createBuffer(RT_BUFFER_OUTPUT | debug_buf_type,
         RT_FORMAT_FLOAT, m_width, m_height));
 
   m_context["target_spb_spec"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+      m_context->createBuffer(RT_BUFFER_OUTPUT | debug_buf_type,
         RT_FORMAT_FLOAT, m_width, m_height));
   m_context["target_spb_spec_theoretical"]->set(
-      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | debug_buf_type,
+      m_context->createBuffer(RT_BUFFER_OUTPUT | debug_buf_type,
         RT_FORMAT_FLOAT, m_width, m_height));
 
   //prefiltering buffers
@@ -731,8 +731,10 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 	  timings[3] += GetCounter();
 #endif
   //display
+  /*
   m_context->launch( 4, static_cast<unsigned int>(buffer_width), 
 	  static_cast<unsigned int>(buffer_height));
+	  */
   //std::cout << "frame: " << m_frame << std::endl;
 
   if (m_frame > NUM_FRAMES_TIME)
@@ -1210,7 +1212,10 @@ void GIScene::createSceneCornell4(InitialCameraData& camera_data)
    // Declare these so validation will pass
   m_context["vfov"]->setFloat( vfov );
   m_context["top_object"]->set( geom_group );
-  m_context["top_shadower"]->set( geom_group );
+  m_context["top_shadower"]->set( geom_group );
+  m_context["spp_mu"]->setFloat(1.f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
+  m_context["imp_samp_scale_specular"]->setFloat(0.f);
 }
 
 
@@ -1355,7 +1360,9 @@ void GIScene::createSceneCornell2(InitialCameraData& camera_data)
   m_context["vfov"]->setFloat( vfov );
   m_context["top_object"]->set( geom_group );
   m_context["top_shadower"]->set( geom_group );
-}
+  m_context["spp_mu"]->setFloat(1.f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
+  m_context["imp_samp_scale_specular"]->setFloat(0.f);}
 
 
 

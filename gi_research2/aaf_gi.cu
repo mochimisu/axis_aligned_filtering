@@ -416,7 +416,7 @@ RT_PROGRAM void sample_direct_z()
   spec_wvmax[launch_index] = cur_spec_wvmax;
 
 
-  int initial_bucket_samples_sqrt = 2;
+  int initial_bucket_samples_sqrt = 4;
   int initial_bucket_samples = initial_bucket_samples_sqrt
     * initial_bucket_samples_sqrt;
 
@@ -485,6 +485,8 @@ RT_PROGRAM void sample_indirect()
   float spp = imp_samp_scale_diffuse
 	*spp_term1*spp_term1
     * spp_term2*spp_term2 * OHMAX * OHMAX;
+
+
 
   float cur_spec_wvmax = spec_wvmax[launch_index];
   float spp_spec_term1 = proj_dist * cur_spec_wvmax/cur_zd.x + alpha;
