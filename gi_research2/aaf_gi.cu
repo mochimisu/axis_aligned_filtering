@@ -394,6 +394,8 @@ RT_PROGRAM void sample_aaf()
 
 	float2 cur_zdist = make_float2(10000000000.f,scene_epsilon);
 	float cur_depth;
+	finfo.indirect_diffuse = make_float3(0);
+	finfo.indirect_specular = make_float3(0);
 
 	if (!dir_samp.hit) {
 		direct_illum[launch_index] = make_float3(0.34f,0.55f,0.85f);
@@ -402,14 +404,13 @@ RT_PROGRAM void sample_aaf()
 		target_spb_spec_theoretical[launch_index] = 0;
 		target_spb_spec[launch_index] = 0;
 		finfo.valid = false;
+		filter_info_out[launch_index] = finfo;
 		return;
 	}
 	direct_illum[launch_index] = dir_samp.incoming_diffuse_light * dir_samp.Kd
 		+ dir_samp.incoming_specular_light * dir_samp.Ks;
 	finfo.valid = true;
 	finfo.world_loc = dir_samp.world_loc;
-	finfo.indirect_diffuse = make_float3(0);
-	finfo.indirect_specular = make_float3(0);
 	finfo.n = dir_samp.norm;
 	finfo.zmin = 1000000000.f;
 	finfo.spec_wvmax = glossy_blim(dir_samp.phong_exp);
@@ -486,7 +487,6 @@ RT_PROGRAM void sample_aaf()
 	float Kd_Ks_ratio = Kd_mag/(Kd_mag+Ks_mag);
 	
 	spp = clampVal(spp * Kd_Ks_ratio, 0.f, (float)spp_mu*max_spb_pass);
-	spp = 100;
 	spec_spp = clampVal(spec_spp* (1.f-Kd_Ks_ratio), 
 	0.f, (float) spp_mu*max_spb_spec_pass);
 
@@ -495,7 +495,6 @@ RT_PROGRAM void sample_aaf()
 	int spp_int = spp_sqrt_int * spp_sqrt_int;
 	target_spb[launch_index] = spp_int;
 
-	//output_buffer[launch_index] = make_float4(spp_int/100.f);
 	
 #ifdef SAMPLE_SPECULAR
 	float spp_spec_sqrt = sqrt(spec_spp);

@@ -693,7 +693,8 @@ void GIScene::trace( const RayGenCameraData& camera_data )
   memcpy(dif_filt1d_in_buf_vals, dif_filt1d_out_buf_vals, sizeof(float3)*buf_w*buf_h);
 
   dif_filt1d_in_buf->unmap();
-  dif_filt1d_out_buf->unmap();
+  dif_filt1d_out_buf->unmap();
+
   Buffer spec_filt1d_in_buf = m_context["indirect_illum_spec_filter1d_in"]->getBuffer();
   Buffer spec_filt1d_out_buf = m_context["indirect_illum_spec_filter1d_out"]->getBuffer();
   float * spec_filt1d_in_buf_vals = reinterpret_cast<float*>(spec_filt1d_in_buf->map());
