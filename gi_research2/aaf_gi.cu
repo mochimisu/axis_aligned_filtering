@@ -102,18 +102,15 @@ struct PerRayData_direct
 };
 rtBuffer<float3, 2>               direct_illum;
 rtBuffer<float3, 2>               indirect_illum;
-rtBuffer<float3, 2>               indirect_illum_filter1d_out;
-rtBuffer<float3, 2>               indirect_illum_filter1d_in;
+rtBuffer<float3, 2>               indirect_illum_filter1d;
 //specular buffers
 rtBuffer<float3, 2>               indirect_illum_spec;
-rtBuffer<float3, 2>               indirect_illum_spec_filter1d_out;
-rtBuffer<float3, 2>               indirect_illum_spec_filter1d_in;
+rtBuffer<float3, 2>               indirect_illum_spec_filter1d;
 
 rtBuffer<float3, 2>               Kd_image;
 rtBuffer<float3, 2>               Ks_image;
 rtBuffer<float, 2>                phong_exp_image;
-rtBuffer<filter_info, 2>          filter_info_in;
-rtBuffer<filter_info, 2>          filter_info_out;
+rtBuffer<filter_info, 2>          filter_info_buf;
 rtDeclareVariable(float3,   Kd, , );
 rtDeclareVariable(float3,   Ks, , );
 rtDeclareVariable(float,   phong_exp, , );
@@ -196,7 +193,7 @@ __device__ __inline__ bool indirectFilterThresholds(
   const float angle_threshold = 5.f * M_PI/180.f;
   const float dist_threshold_sq = cur_zpmin*cur_zpmin;
 
-  filter_info target_finfo = filter_info_in[target_index];
+  filter_info target_finfo = filter_info_buf[target_index];
 
   float target_zpmin = target_finfo.zmin;
   float3 target_n = target_finfo.n;
@@ -257,7 +254,7 @@ __device__ __inline__ void indirectFilter(
   if (can_filter)
   {
     //TODO: cleanup
-	  filter_info cur_finfo = filter_info_in[target_index];
+	  filter_info cur_finfo = filter_info_buf[target_index];
 
 	  if(!cur_finfo.valid)
 		  return;
@@ -280,9 +277,9 @@ __device__ __inline__ void indirectFilter(
 #endif
     if (pass == 1)
     {
-      target_indirect = indirect_illum_filter1d_in[target_index];
+      target_indirect = indirect_illum_filter1d[target_index];
 #ifdef FILTER_SPECULAR
-      target_indirect_spec = indirect_illum_spec_filter1d_in[target_index];
+      target_indirect_spec = indirect_illum_spec_filter1d[target_index];
 #endif
     }
 
@@ -404,7 +401,7 @@ RT_PROGRAM void sample_aaf()
 		target_spb_spec_theoretical[launch_index] = 0;
 		target_spb_spec[launch_index] = 0;
 		finfo.valid = false;
-		filter_info_out[launch_index] = finfo;
+		filter_info_buf[launch_index] = finfo;
 		return;
 	}
 	direct_illum[launch_index] = dir_samp.incoming_diffuse_light * dir_samp.Kd
@@ -651,13 +648,13 @@ RT_PROGRAM void sample_aaf()
 	finfo.zmin = cur_zdist.x;
 
 
-	filter_info_out[launch_index] = finfo;
+	filter_info_buf[launch_index] = finfo;
 }
 
 RT_PROGRAM void indirect_filter_first_pass()
 {
-	size_t2 buf_size = filter_info_in.size();
-	filter_info cur_finfo = filter_info_in[launch_index];
+	size_t2 buf_size = filter_info_buf.size();
+	filter_info cur_finfo = filter_info_buf[launch_index];
 	float cur_zmin = cur_finfo.zmin;
 
 	float3 blurred_indirect_sum = make_float3(0.f);
@@ -688,23 +685,23 @@ RT_PROGRAM void indirect_filter_first_pass()
 		}
 
 		if (sum_weight > 0.0001f)
-			indirect_illum_filter1d_out[launch_index] = blurred_indirect_sum/sum_weight;
+			indirect_illum_filter1d[launch_index] = blurred_indirect_sum/sum_weight;
 		else
-			indirect_illum_filter1d_out[launch_index] = cur_finfo.indirect_diffuse;
+			indirect_illum_filter1d[launch_index] = cur_finfo.indirect_diffuse;
 #ifdef FILTER_SPECULAR
 		if (sum_weight_spec > 0.0001f)
-			indirect_illum_spec_filter1d_out[launch_index] = blurred_indirect_spec_sum
+			indirect_illum_spec_filter1d[launch_index] = blurred_indirect_spec_sum
 			/sum_weight_spec;
 		else
-			indirect_illum_spec_filter1d_out[launch_index] = cur_finfo.indirect_specular;
+			indirect_illum_spec_filter1d[launch_index] = cur_finfo.indirect_specular;
 #endif
 
 }
 RT_PROGRAM void indirect_filter_second_pass()
 {
   
-	size_t2 buf_size = filter_info_in.size();
-	filter_info cur_finfo = filter_info_in[launch_index];
+	size_t2 buf_size = filter_info_buf.size();
+	filter_info cur_finfo = filter_info_buf[launch_index];
 	float cur_zmin = cur_finfo.zmin;
 
 	float3 blurred_indirect_sum = make_float3(0.f);
@@ -740,14 +737,14 @@ RT_PROGRAM void indirect_filter_second_pass()
   if (sum_weight > 0.0001f)
     indirect_illum[launch_index] = blurred_indirect_sum/sum_weight;
   else
-    indirect_illum[launch_index] = indirect_illum_filter1d_in[launch_index];
+    indirect_illum[launch_index] = indirect_illum_filter1d[launch_index];
 #ifdef FILTER_SPECULAR
   if (sum_weight_spec > 0.0001f)
     indirect_illum_spec[launch_index] = blurred_indirect_spec_sum
       /sum_weight_spec;
   else
     indirect_illum_spec[launch_index] = 
-      indirect_illum_spec_filter1d_in[launch_index];
+      indirect_illum_spec_filter1d[launch_index];
 #endif
 
 }

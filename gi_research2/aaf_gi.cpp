@@ -17,7 +17,7 @@
 // 4: Cornell box 3 (Glossy defined by obj)
 // 5: Sibenik
 // 6: Cornell box 4 (Soham's w/ objs) (Diffuse)
-#define SCENE 3
+#define SCENE 6
 
 //number of maximum samples per pixel
 #define MAX_SPP 100
@@ -198,6 +198,9 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context->setRayTypeCount( 5 );
   m_context->setEntryPointCount( 4 );
   m_context->setStackSize( 1800 );
+  
+  std::vector<int> devices = m_context->getEnabledDevices();
+  m_context->setDevices(devices.begin(), devices.begin()+1);
 
   m_context["scene_epsilon"]->setFloat( 0.01f );
   m_context["max_depth"]->setUint(m_max_depth);
@@ -259,7 +262,7 @@ void GIScene::initScene( InitialCameraData& camera_data )
   uint input_type = RT_BUFFER_INPUT;
   uint output_type = RT_BUFFER_OUTPUT;
 
-  //input_type = output_type = RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL;
+  input_type = output_type = RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL;
   //uint mult_gpu_type = RT_BUFFER_INPUT_OUTPUT;
   //Direct Illumination Buffer
   m_context["direct_illum"]->set(
@@ -287,27 +290,17 @@ void GIScene::initScene( InitialCameraData& camera_data )
 
 
   //Intermediate buffers to keep between passes
-  m_context["indirect_illum_filter1d_out"]->set(
+  m_context["indirect_illum_filter1d"]->set(
       m_context->createBuffer(output_type,
         RT_FORMAT_FLOAT3, m_width, m_height));
-  m_context["indirect_illum_spec_filter1d_out"]->set(
+  m_context["indirect_illum_spec_filter1d"]->set(
       m_context->createBuffer(output_type,
         RT_FORMAT_FLOAT3, m_width, m_height));
-  m_context["indirect_illum_filter1d_in"]->set(
-	  m_context->createBuffer(input_type,
-	  RT_FORMAT_FLOAT3, m_width, m_height));
-  m_context["indirect_illum_spec_filter1d_in"]->set(
-	  m_context->createBuffer(input_type,
-	  RT_FORMAT_FLOAT3, m_width, m_height));
 
   Buffer finfo_out_buf = m_context->createBuffer(output_type,
 	  RT_FORMAT_USER, m_width, m_height);
-  Buffer finfo_in_buf = m_context->createBuffer(input_type,
-	  RT_FORMAT_USER, m_width, m_height);
   finfo_out_buf->setElementSize(sizeof(filter_info));
-  finfo_in_buf->setElementSize(sizeof(filter_info));
-  m_context["filter_info_out"]->set(finfo_out_buf);
-  m_context["filter_info_in"]->set(finfo_in_buf);
+  m_context["filter_info_buf"]->set(finfo_out_buf);
 
 
   //spp buffer
@@ -656,22 +649,6 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 	  timings[0] += GetCounter();
   StartCounter();
 #endif
-
-  /* test code to copy stuff between input output buffers */
-  //TODO: cudaMemcpyPeer
-  Buffer finfo_in_buf = m_context["filter_info_in"]->getBuffer();
-  Buffer finfo_out_buf = m_context["filter_info_out"]->getBuffer();
-
-  RTsize buf_w, buf_h;
-  finfo_in_buf->getSize(buf_w, buf_h);
-
-  float * finfo_in_buf_vals = reinterpret_cast<float*>(finfo_in_buf->map());
-  float * finfo_out_buf_vals = reinterpret_cast<float*>(finfo_out_buf->map());
-
-  memcpy(finfo_in_buf_vals, finfo_out_buf_vals, sizeof(filter_info)*buf_w*buf_h);
-
-  finfo_in_buf->unmap();
-  finfo_out_buf->unmap();
 #ifdef WINDOWS_TIME
   if(m_frame > NUM_BUFFER_FRAMES)
 	  timings[1] += GetCounter();
@@ -685,25 +662,6 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 	  timings[2] += GetCounter();
   StartCounter();
 #endif
-  Buffer dif_filt1d_in_buf = m_context["indirect_illum_filter1d_in"]->getBuffer();
-  Buffer dif_filt1d_out_buf = m_context["indirect_illum_filter1d_out"]->getBuffer();
-  float * dif_filt1d_in_buf_vals = reinterpret_cast<float*>(dif_filt1d_in_buf->map());
-  float * dif_filt1d_out_buf_vals = reinterpret_cast<float*>(dif_filt1d_out_buf->map());
-
-  memcpy(dif_filt1d_in_buf_vals, dif_filt1d_out_buf_vals, sizeof(float3)*buf_w*buf_h);
-
-  dif_filt1d_in_buf->unmap();
-  dif_filt1d_out_buf->unmap();
-
-  Buffer spec_filt1d_in_buf = m_context["indirect_illum_spec_filter1d_in"]->getBuffer();
-  Buffer spec_filt1d_out_buf = m_context["indirect_illum_spec_filter1d_out"]->getBuffer();
-  float * spec_filt1d_in_buf_vals = reinterpret_cast<float*>(spec_filt1d_in_buf->map());
-  float * spec_filt1d_out_buf_vals = reinterpret_cast<float*>(spec_filt1d_out_buf->map());
-  
-  memcpy(spec_filt1d_in_buf_vals, spec_filt1d_out_buf_vals, sizeof(float3)*buf_w*buf_h);
-  
-  spec_filt1d_in_buf->unmap();
-  spec_filt1d_out_buf->unmap();
 #ifdef WINDOWS_TIME
   if(m_frame > NUM_BUFFER_FRAMES)
 	  timings[3] += GetCounter();
