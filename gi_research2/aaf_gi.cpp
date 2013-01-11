@@ -17,7 +17,7 @@
 // 4: Cornell box 3 (Glossy defined by obj)
 // 5: Sibenik
 // 6: Cornell box 4 (Soham's w/ objs) (Diffuse)
-#define SCENE 2
+#define SCENE 6
 
 //number of maximum samples per pixel
 #define MAX_SPP 100
@@ -34,7 +34,9 @@
 //#define HEIGHT 512u
 //#define WIDTH 1024u
 //#define HEIGHT 1024u
-#define WINDOWS_TIME
+
+//timings (on windows only)
+//#define WINDOWS_TIME
 
 //=== End config
 
@@ -689,6 +691,7 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 	  static_cast<unsigned int>(buffer_height));
   //std::cout << "frame: " << m_frame << std::endl;
 
+#ifdef WINDOWS_TIME
   if (m_frame > NUM_FRAMES_TIME)
   {
 	  std::cout << "=====================" << std::endl;
@@ -701,6 +704,7 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 	  std::cout << "Filter Information Memcpy: " << (double)timings[3]/(m_frame-NUM_BUFFER_FRAMES) << " ms" << std::endl;
 	  std::cout << "Filter Second Pass: " << (double)timings[4]/(m_frame-NUM_BUFFER_FRAMES) << " ms" << std::endl;
   }
+#endif
 
 }
 
