@@ -17,7 +17,7 @@
 // 4: Cornell box 3 (Glossy defined by obj)
 // 5: Sibenik
 // 6: Cornell box 4 (Soham's w/ objs) (Diffuse)
-#define SCENE 6
+#define SCENE 4
 
 //number of maximum samples per pixel
 #define MAX_SPP 100
