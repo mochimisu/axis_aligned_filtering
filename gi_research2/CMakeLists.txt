@@ -30,6 +30,7 @@ if(GLUT_FOUND AND OPENGL_FOUND)
     # These files are common among multiple samples
     helpers.h
     parallelogram.cu
+	sphere.cu
     aaf_gi.cu
     aaf_gi.h
     random.h

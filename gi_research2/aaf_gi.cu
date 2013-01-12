@@ -10,7 +10,6 @@
 
 #define MAX_FILT_RADIUS 50.f
 #define OHMAX 2.8f
-#define MIN_Z_MIN 15.0f
 
 using namespace optix;
 
@@ -128,6 +127,10 @@ rtDeclareVariable(uint, use_textures, , );
 rtDeclareVariable(float, spp_mu, , );
 rtDeclareVariable(float, imp_samp_scale_diffuse, ,);
 rtDeclareVariable(uint, first_pass_spb_sqrt, ,);
+rtDeclareVariable(float, z_threshold, , );
+rtDeclareVariable(float, alpha, ,);
+rtDeclareVariable(float, min_zmin, ,);
+rtDeclareVariable(float, primary_ray_epsilon, ,);
 
 
 rtDeclareVariable(uint, view_mode, , );
@@ -191,12 +194,15 @@ __device__ __inline__ bool indirectFilterThresholds(
     const filter_info& target_finfo,
     const size_t2& buf_size)
 {
-  const float z_threshold = .7f;
+  //const float z_threshold = .5f;
   const float angle_threshold = 5.f * M_PI/180.f;
   const float dist_threshold_sq = cur_finfo.zmin*cur_finfo.zmin;
 
+  float z_ratio = target_finfo.zmin / cur_finfo.zmin;
+
   if (target_finfo.valid
       && abs(acos(dot(target_finfo.n, cur_finfo.n))) < angle_threshold
+	  && max(z_ratio, 1.f/z_ratio) < z_threshold
      )
   {
     float3 target_loc = target_finfo.world_loc;
@@ -215,12 +221,13 @@ __device__ __inline__ float filterWeight(
 	const filter_info& cur_finfo,
 	const filter_info& target_finfo,
     float wvmax)
-{	float3 diff = cur_finfo.world_loc - target_finfo.world_loc;
+{
+	float3 diff = cur_finfo.world_loc - target_finfo.world_loc;
 	float euclidean_distsq = dot(diff,diff);
 	float rDn = dot(diff, cur_finfo.n);
 	float proj_distsq = euclidean_distsq - rDn*rDn;
 
-	float wxf = wvmax*(1.f+50.f*acos(dot(target_finfo.n,cur_finfo.n)))
+	float wxf = wvmax
 		/cur_finfo.zmin;	
 	float sample = proj_distsq*wxf*wxf*spp_mu*spp_mu;
 	if (sample > 2.f) {
@@ -359,7 +366,7 @@ RT_PROGRAM void sample_aaf()
 	PerRayData_direct dir_samp;
 	dir_samp.hit = false;
 	Ray ray = make_Ray(ray_origin, ray_direction, direct_ray_type, 
-		scene_epsilon, RT_DEFAULT_MAX);
+		primary_ray_epsilon, RT_DEFAULT_MAX);
 	rtTrace(top_object, ray, dir_samp);
 
 	float2 cur_zdist = make_float2(10000000000.f,scene_epsilon);
@@ -421,7 +428,7 @@ RT_PROGRAM void sample_aaf()
 		rtTrace(top_object, indir_ray, indir_samp);
 		if (indir_samp.hit)
 		{
-			cur_zdist.x = clamp(indir_samp.z_dist, MIN_Z_MIN, cur_zdist.x);
+			cur_zdist.x = clamp(indir_samp.z_dist, min_zmin, cur_zdist.x);
 			cur_zdist.y = max(cur_zdist.y, indir_samp.z_dist);
 		}
 	}
@@ -430,7 +437,6 @@ RT_PROGRAM void sample_aaf()
 	float proj_dist = 2.f/screen.y * cur_depth 
 		* tan(vfov/2.f*M_PI/180.f);
 	finfo.proj_dist = proj_dist;
-	float alpha = 1.f;
 	//what is this for?
 	//cur_zdist.y = clampVal(2.f*cur_zdist.x/(spp_mu*OHMAX*proj_dist), 1.f, MAX_FILT_RADIUS);
 	float spp_term1 = OHMAX * spp_mu * proj_dist/cur_zdist.x + alpha;
@@ -645,9 +651,12 @@ RT_PROGRAM void indirect_filter_first_pass()
 	if (cur_finfo.valid)
 		for (int i = -radius; i < radius; ++i)
 		{
-			uint2 target_index = make_uint2(launch_index.x+i, launch_index.y);			if (target_index.x > 0 && target_index.x < buf_size.x 
+			uint2 target_index = make_uint2(launch_index.x+i, launch_index.y);
+			if (target_index.x > 0 && target_index.x < buf_size.x 
 				&& target_index.y > 0 && target_index.y < buf_size.y)
-			{				target_finfo = filter_info_in[target_index];				indirectFilter(
+			{
+				target_finfo = filter_info_in[target_index];
+				indirectFilter(
 					cur_finfo, target_finfo, buf_size,
 					target_finfo.indirect_diffuse,
 					blurred_indirect_sum, sum_weight
@@ -673,7 +682,8 @@ RT_PROGRAM void indirect_filter_first_pass()
 
 }
 RT_PROGRAM void indirect_filter_second_pass()
-{	size_t2 buf_size = filter_info_in.size();
+{
+	size_t2 buf_size = filter_info_in.size();
 	filter_info cur_finfo = filter_info_in[launch_index];
 	filter_info target_finfo;
 
@@ -691,9 +701,11 @@ RT_PROGRAM void indirect_filter_second_pass()
 	if (cur_finfo.valid)
 		for (int i = -radius; i < radius; ++i)
 		{
-			uint2 target_index = make_uint2(launch_index.x, launch_index.y+i);			if (target_index.x > 0 && target_index.x < buf_size.x 
+			uint2 target_index = make_uint2(launch_index.x, launch_index.y+i);
+			if (target_index.x > 0 && target_index.x < buf_size.x 
 				&& target_index.y > 0 && target_index.y < buf_size.y)
-			{				target_finfo = filter_info_in[target_index];
+			{
+				target_finfo = filter_info_in[target_index];
 				float3 target_indirect = indirect_illum_filter1d_in[target_index];
 #ifdef FILTER_SPECULAR
 				float3 target_indirect_spec = indirect_illum_spec_filter1d_in[target_index];
@@ -706,7 +718,8 @@ RT_PROGRAM void indirect_filter_second_pass()
 					, blurred_indirect_spec_sum, sum_weight_spec,
 					target_indirect_spec
 #endif
-					);			}
+					);
+			}
 		}
 	else
 		indirect_illum[launch_index] = make_float3(0);
@@ -732,10 +745,14 @@ RT_PROGRAM void display()
 	//output_buffer[launch_index] = make_float4(direct_illum[launch_index]);
 
 	output_buffer[launch_index] = make_float4(
-		direct_illum[launch_index]
-	  + indirect_illum[launch_index] * Kd_image[launch_index]
-	  + indirect_illum_spec[launch_index] * Ks_image[launch_index]
+		direct_illum[launch_index] + 
+		indirect_illum[launch_index] * Kd_image[launch_index] +
+		indirect_illum_spec[launch_index] * Ks_image[launch_index]
 	  ,1.f);
+	  /*
+	  output_buffer[launch_index] = make_float4(
+		  filter_info_in[launch_index].indirect_specular);
+		  */
 	  /*
 	  //output_buffer[launch_index] = make_float4(indirect_illum[launch_index]);
   float3 indirect_illum_combined = indirect_illum[make_uint2(launch_index.x, 

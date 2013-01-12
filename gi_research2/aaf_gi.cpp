@@ -17,7 +17,10 @@
 // 4: Cornell box 3 (Glossy defined by obj)
 // 5: Sibenik
 // 6: Cornell box 4 (Soham's w/ objs) (Diffuse)
-#define SCENE 6
+// 7: Cornell box 5  (Comparison Diffuse)
+// 8: Cornell box 6  (Simple Glossy)
+#define SCENE 8
+#define COPY_SPECULAR
 
 //number of maximum samples per pixel
 #define MAX_SPP 100
@@ -25,7 +28,7 @@
 //#define MAX_SPP 25
 
 //depth of indirect bounces
-#define INDIRECT_BOUNCES 1
+#define INDIRECT_BOUNCES 2
 
 //default width, height
 #define WIDTH 640u
@@ -36,7 +39,7 @@
 //#define HEIGHT 1024u
 
 //timings (on windows only)
-//#define WINDOWS_TIME
+#define WINDOWS_TIME
 
 //=== End config
 
@@ -65,7 +68,7 @@ using namespace optix;
 
 #ifdef WINDOWS_TIME
 #include <Windows.h>
-#define NUM_FRAMES_TIME 100.
+#define NUM_FRAMES_TIME 50.
 #define NUM_BUFFER_FRAMES 10u
 double pc_freq = 0.;
 __int64 counter_start = 0;
@@ -140,13 +143,17 @@ private:
   void createSceneCornell2(InitialCameraData& camera_data);
   void createSceneCornell3(InitialCameraData& camera_data);
   void createSceneCornell4(InitialCameraData& camera_data);
+  void createSceneCornell5(InitialCameraData& camera_data);
+  void createSceneCornell6(InitialCameraData& camera_data);
   void createSceneSponza(InitialCameraData& camera_data);
   void createSceneConference(InitialCameraData& camera_data);
   void createSceneSibenik(InitialCameraData& camera_data);
 
   GeometryInstance createParallelogram( const float3& anchor,
                                         const float3& offset1,
-                                        const float3& offset2);
+                                        const float3& offset2);
+  GeometryInstance createSphere( const float3& center,
+	  const float& radius);
 
   GeometryInstance createLightParallelogram( const float3& anchor,
                                              const float3& offset1,
@@ -159,6 +166,8 @@ private:
 
   Program        m_pgram_bounding_box;
   Program        m_pgram_intersection;
+  Program        m_pgram_sph_bounding_box;
+  Program        m_pgram_sph_intersection;
 
   unsigned int   m_rr_begin_depth;
   unsigned int   m_max_depth;
@@ -192,6 +201,7 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context->setStackSize( 1800 );
 
   m_context["scene_epsilon"]->setFloat( 0.01f );
+  m_context["primary_ray_epsilon"]->setFloat(0.01f);
   m_context["max_depth"]->setUint(m_max_depth);
   m_context["pathtrace_shadow_ray_type"]->setUint(1u);
   m_context["pathtrace_bsdf_shadow_ray_type"]->setUint(2u);
@@ -352,6 +362,10 @@ void GIScene::initScene( InitialCameraData& camera_data )
   createSceneSibenik(camera_data);
 #elif SCENE == 6
   createSceneCornell4(camera_data);
+#elif SCENE == 7
+  createSceneCornell5(camera_data);
+#elif SCENE == 8
+  createSceneCornell6(camera_data);
 #endif
   
 
@@ -665,6 +679,7 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 
   dif_filt1d_in_buf->unmap();
   dif_filt1d_out_buf->unmap();
+#ifdef COPY_SPECULAR
 
   Buffer spec_filt1d_in_buf = m_context["indirect_illum_spec_filter1d_in"]->getBuffer();
   Buffer spec_filt1d_out_buf = m_context["indirect_illum_spec_filter1d_out"]->getBuffer();
@@ -675,6 +690,7 @@ void GIScene::trace( const RayGenCameraData& camera_data )
   
   spec_filt1d_in_buf->unmap();
   spec_filt1d_out_buf->unmap();
+#endif
 #ifdef WINDOWS_TIME
   if(m_frame > NUM_BUFFER_FRAMES)
 	  timings[3] += GetCounter();
@@ -742,6 +758,20 @@ GeometryInstance GIScene::createParallelogram( const float3& anchor,
   return gi;
 }
 
+GeometryInstance GIScene::createSphere( const float3& center,
+											  const float& radius)
+{
+	Geometry sphere = m_context->createGeometry();
+	sphere->setPrimitiveCount( 1u );
+	sphere->setIntersectionProgram( m_pgram_sph_intersection );
+	sphere->setBoundingBoxProgram( m_pgram_sph_bounding_box );
+
+	sphere["sphere"]->setFloat( make_float4(center, radius) );
+
+	GeometryInstance gi = m_context->createGeometryInstance();
+	gi->setGeometry(sphere);
+	return gi;
+}
 
 GeometryInstance GIScene::createLightParallelogram( const float3& anchor,
     const float3& offset1,
@@ -839,7 +869,134 @@ void GIScene::createSceneSibenik(InitialCameraData& camera_data)
   m_context["imp_samp_scale_specular"]->setFloat(1.f);
 }
 
+void GIScene::createSceneSponza(InitialCameraData& camera_data)
+{
+  m_use_textures = true;
+  // Set up camera
+  const float vfov = 45.f;
+  //sponza
+  //
+  camera_data = InitialCameraData( make_float3( 652.5f, 673.5f, 0.f ), // eye
+      make_float3( 614.0f, 660.0f, 0.0f ),    // lookat
+      make_float3( 0.0f, 1.0f,  0.0f ),       // up
+      vfov);                                 // vfov
 
+
+  ParallelogramLight light;
+  light.corner   = make_float3( 480.0f, 700.f, 150.f);
+  light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
+  light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
+  light.normal   = normalize( cross(light.v1, light.v2) );
+  light.emission = make_float3( 15.0f, 15.0f, 5.0f );
+  
+  Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
+  light_buffer->setFormat( RT_FORMAT_USER );
+  light_buffer->setElementSize( sizeof( ParallelogramLight ) );
+  light_buffer->setSize( 1u );
+  memcpy( light_buffer->map(), &light, sizeof( light ) );
+  light_buffer->unmap();
+  m_context["lights"]->setBuffer( light_buffer ); 
+  
+  GeometryGroup conference_geom_group = m_context->createGeometryGroup();
+  
+
+  Material diffuse = m_context->createMaterial();
+  Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+        "aaf_gi.cu" ), "shadow" );
+  Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+        "aaf_gi.cu" ), "closest_hit_direct" );
+  diffuse->setClosestHitProgram( 3, diffuse_p );
+  diffuse->setAnyHitProgram( 1, diffuse_ah );
+
+  diffuse["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
+  diffuse["Ks"]->setFloat( 0.f, 0.f, 0.f );
+  diffuse["phong_exp"]->setFloat( 1.f );
+  diffuse["obj_id"]->setInt(10);
+  
+  std::string objpath = std::string( sutilSamplesDir() ) + 
+    "/gi_research2/data/crytek_sponza/sponza_noflag.obj";
+  ObjLoader * conference_loader = new ObjLoader( objpath.c_str(), 
+      m_context, conference_geom_group, diffuse, true );
+  conference_loader->load();
+
+
+  // Declare these so validation will pass
+  m_context["vfov"]->setFloat( vfov );
+  m_context["spp_mu"]->setFloat(.8f);
+
+  
+  m_context["top_object"]->set( conference_geom_group );
+  m_context["top_shadower"]->set( conference_geom_group );
+  m_context["imp_samp_scale_diffuse"]->setFloat(.3f);
+  m_context["imp_samp_scale_specular"]->setFloat(0.f);
+
+  m_context["alpha"]->setFloat(0.3f);
+  m_context["z_threshold"]->setFloat(10.f);
+  m_context["min_zmin"]->setFloat(15.f);
+
+}
+
+void GIScene::createSceneConference(InitialCameraData& camera_data)
+{
+  m_use_textures = true;
+  // Set up camera
+  const float vfov = 35.f;
+  //conference
+  //
+  camera_data = InitialCameraData( make_float3( -550.f, 420.f, -800.f ), // eye
+  make_float3( 500.f, 202.f, 451.f ),    // lookat
+      make_float3( 0.0f, 1.0f,  0.0f ),       // up
+      vfov );                                // vfov
+                              // vfov
+
+  ParallelogramLight light;
+  light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
+  light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
+  light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
+  light.normal   = normalize( cross(light.v1, light.v2) );
+  light.emission = make_float3( 15.0f, 15.0f, 5.0f );
+  
+  Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
+  light_buffer->setFormat( RT_FORMAT_USER );
+  light_buffer->setElementSize( sizeof( ParallelogramLight ) );
+  light_buffer->setSize( 1u );
+  memcpy( light_buffer->map(), &light, sizeof( light ) );
+  light_buffer->unmap();
+  m_context["lights"]->setBuffer( light_buffer ); 
+  
+  GeometryGroup conference_geom_group = m_context->createGeometryGroup();
+  
+
+  Material diffuse = m_context->createMaterial();
+  Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+        "aaf_gi.cu" ), "shadow" );
+  Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+        "aaf_gi.cu" ), "closest_hit_direct" );
+  diffuse->setClosestHitProgram( 3, diffuse_p );
+  diffuse->setAnyHitProgram( 1, diffuse_ah );
+
+  diffuse["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
+  diffuse["Ks"]->setFloat( 0.f, 0.f, 0.f );
+  diffuse["phong_exp"]->setFloat( 1.f );
+  
+  std::string objpath = std::string( sutilSamplesDir() ) + 
+    "/gi_research2/data/conference/conference_diffuse.obj";
+  ObjLoader * conference_loader = new ObjLoader( objpath.c_str(), 
+      m_context, conference_geom_group, diffuse, true );
+  conference_loader->load();
+
+  m_context["vfov"]->setFloat( vfov );
+  
+  m_context["top_object"]->set( conference_geom_group );
+  m_context["top_shadower"]->set( conference_geom_group );
+  m_context["spp_mu"]->setFloat(0.8f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(.3f);
+  m_context["imp_samp_scale_specular"]->setFloat(0.f);
+
+  m_context["alpha"]->setFloat(0.3f);
+  m_context["z_threshold"]->setFloat(5.f);
+  m_context["min_zmin"]->setFloat(20.f);
+}
 
 void GIScene::createSceneCornell(InitialCameraData& camera_data)
 {
@@ -996,163 +1153,11 @@ void GIScene::createSceneCornell(InitialCameraData& camera_data)
   m_context["spp_mu"]->setFloat(1.f);
   m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
   m_context["imp_samp_scale_specular"]->setFloat(0.1f);
-}
-
-
-void GIScene::createSceneCornell4(InitialCameraData& camera_data)
-{
-
-  m_use_textures = false;
-  // Set up camera
-  const float vfov = 35.f;
-
-  camera_data = InitialCameraData( 
-      make_float3( 278.0f, 550.0f, -700.0f ), // eye
-      make_float3( 278.0f, 273.0f, 0.0f ),    // lookat
-      make_float3( 0.0f, 1.0f,  0.0f ),       // up
-      35.0f );         // vfov
-
-
-
-  // Light buffer
-  ParallelogramLight light;
-  light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
-  light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
-  light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
-  light.normal   = normalize( cross(light.v1, light.v2) );
-  light.emission = make_float3( 15.0f, 15.0f, 5.0f );
-
-  Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
-  light_buffer->setFormat( RT_FORMAT_USER );
-  light_buffer->setElementSize( sizeof( ParallelogramLight ) );
-  light_buffer->setSize( 1u );
-  memcpy( light_buffer->map(), &light, sizeof( light ) );
-  light_buffer->unmap();
-  m_context["lights"]->setBuffer( light_buffer );
-  // Set up material
-  Material diffuse = m_context->createMaterial();
-  Material diffuse2 = m_context->createMaterial();
-  Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
-        "aaf_gi.cu" ), "shadow" );
-  Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
-        "aaf_gi.cu" ), "closest_hit_direct" );
-  diffuse->setClosestHitProgram( 3, diffuse_p );
-  diffuse->setAnyHitProgram( 1, diffuse_ah );
-  diffuse2->setClosestHitProgram( 3, diffuse_p );
-  diffuse2->setAnyHitProgram( 1, diffuse_ah );
   
-  //dummy texture maps
-  diffuse["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
-        make_float3( 0.2f, 0.2f, 0.2f ) ) );
-  diffuse["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
-        make_float3( 0.8f, 0.8f, 0.8f ) ) );
-  diffuse["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
-        make_float3( 0.0f, 0.0f, 0.0f ) ) );
-  diffuse["Kd"]->setFloat(0.5,0.5,0.5);
-  diffuse["Ks"]->setFloat(0.,0.,0.);
-  diffuse["phong_exp"]->setFloat(1.);
-  diffuse2["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
-        make_float3( 0.0f, 0.0f, 0.0f ) ) );
-  diffuse2["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
-        make_float3( 0.0f, 0.0f, 0.0f ) ) );
-  diffuse2["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
-        make_float3( 0.0f, 0.0f, 0.0f ) ) );
-
-  diffuse2["Kd"]->setFloat(0.5,0.5,0.5);
-  diffuse2["Ks"]->setFloat(0.0,0.0,0.0);
-  diffuse2["phong_exp"]->setFloat(10.);
-
-  // Set up parallelogram programs
-  std::string ptx_path = ptxpath( "aaf_gi", "parallelogram.cu" );
-  m_pgram_bounding_box = m_context->createProgramFromPTXFile( ptx_path, 
-      "bounds" );
-  m_pgram_intersection = m_context->createProgramFromPTXFile( ptx_path, 
-      "intersect" );
-
-  // set up sphere program
-  std::string ptx_path_sph = ptxpath( "aaf_gi", "sphere.cu" );
-  m_pgram_bounding_box = m_context->createProgramFromPTXFile( ptx_path, 
-  "bounds" );
-  m_pgram_intersection = m_context->createProgramFromPTXFile( ptx_path, 
-  "intersect" );
-
-  // create geometry instances
-  std::vector<GeometryInstance> gis;
-
-  const float3 white = make_float3( 0.7f, 0.7f, 0.7f );
-  const float3 green = make_float3( 0.1f, 0.7f, 0.1f );
-  const float3 red   = make_float3( 0.7f, 0.1f, 0.1f );
-  const float3 light_em = make_float3( 15.0f, 15.0f, 15.0f );
-
-  // Floor
-  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
-                                      make_float3( 0.0f, 0.0f, 559.2f ),
-                                      make_float3( 556.0f, 0.0f, 0.0f ) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
-
-  // Ceiling
-  gis.push_back( createParallelogram( make_float3( 0.0f, 548.8f, 0.0f ),
-                                      make_float3( 556.0f, 0.0f, 0.0f ),
-                                      make_float3( 0.0f, 0.0f, 559.2f ) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
-
-  // Back wall
-  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 559.2f),
-                                      make_float3( 0.0f, 548.8f, 0.0f),
-                                      make_float3( 556.0f, 0.0f, 0.0f) ) );
-  setMaterial(gis.back(), diffuse, "Kd", white);
-
-  // Right wall
-  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
-                                      make_float3( 0.0f, 548.8f, 0.0f ),
-                                      make_float3( 0.0f, 0.0f, 559.2f ) ) );
-  setMaterial(gis.back(), diffuse, "Kd", green);
-
-  // Left wall
-  gis.push_back( createParallelogram( make_float3( 556.0f, 0.0f, 0.0f ),
-                                      make_float3( 0.0f, 0.0f, 559.2f ),
-                                      make_float3( 0.0f, 548.8f, 0.0f ) ) );
-  setMaterial(gis.back(), diffuse, "Kd", red);
-
-
-  GeometryGroup geom_group = m_context->createGeometryGroup(gis.begin(), 
-      gis.end());
-
- Matrix4x4 bunny_xform = Matrix4x4::translate(make_float3(370,-50,270)) 
-    * Matrix4x4::rotate(M_PI + M_PI/3,make_float3(0,1,0))
-	* Matrix4x4::scale(make_float3(2000,2000,2000));
-    
-  std::string objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/bunny.obj";
-  ObjLoader * bunny_loader = new ObjLoader( objpath.c_str(), m_context, 
-      geom_group, diffuse, true );
-  bunny_loader->load(bunny_xform);
-
-  Matrix4x4 sphere_xform = Matrix4x4::translate(make_float3(170,250,270))
-    * Matrix4x4::scale(make_float3(200,200,200));
-
-   Matrix4x4 cube_xform = Matrix4x4::translate(make_float3(250,0,270))	
-    * Matrix4x4::rotate(M_PI-M_PI/8,make_float3(0,-1,0))
-    * Matrix4x4::scale(make_float3(150,150,150));
-    
-  objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/sphere.obj";
-  ObjLoader * sphere_loader = new ObjLoader( objpath.c_str(), m_context, 
-      geom_group, diffuse2, true );
-  sphere_loader->load(sphere_xform);
-
-  objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/cube.obj";
-  ObjLoader * cube_loader = new ObjLoader( objpath.c_str(), m_context, 
-      geom_group, diffuse2, true );
-  cube_loader->load(cube_xform);
-
-   // Declare these so validation will pass
-  m_context["vfov"]->setFloat( vfov );
-  m_context["top_object"]->set( geom_group );
-  m_context["top_shadower"]->set( geom_group );
-  m_context["spp_mu"]->setFloat(1.f);
-  m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
-  m_context["imp_samp_scale_specular"]->setFloat(0.f);
+  m_context["alpha"]->setFloat(0.4f);
+  m_context["z_threshold"]->setFloat(5.f);
+  m_context["min_zmin"]->setFloat(0.08f);
 }
-
 
 void GIScene::createSceneCornell2(InitialCameraData& camera_data)
 {
@@ -1300,129 +1305,10 @@ void GIScene::createSceneCornell2(InitialCameraData& camera_data)
   m_context["spp_mu"]->setFloat(.8f);
   m_context["imp_samp_scale_diffuse"]->setFloat(0.2f);
   m_context["imp_samp_scale_specular"]->setFloat(0.1f);
-}
-
-
-
-void GIScene::createSceneSponza(InitialCameraData& camera_data)
-{
-  m_use_textures = true;
-  // Set up camera
-  const float vfov = 45.f;
-  //sponza
-  //
-  camera_data = InitialCameraData( make_float3( 652.5f, 673.5f, 0.f ), // eye
-      make_float3( 614.0f, 660.0f, 0.0f ),    // lookat
-      make_float3( 0.0f, 1.0f,  0.0f ),       // up
-      vfov);                                 // vfov
-
-
-  ParallelogramLight light;
-  light.corner   = make_float3( 480.0f, 700.f, 150.f);
-  light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
-  light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
-  light.normal   = normalize( cross(light.v1, light.v2) );
-  light.emission = make_float3( 15.0f, 15.0f, 5.0f );
   
-  Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
-  light_buffer->setFormat( RT_FORMAT_USER );
-  light_buffer->setElementSize( sizeof( ParallelogramLight ) );
-  light_buffer->setSize( 1u );
-  memcpy( light_buffer->map(), &light, sizeof( light ) );
-  light_buffer->unmap();
-  m_context["lights"]->setBuffer( light_buffer ); 
-  
-  GeometryGroup conference_geom_group = m_context->createGeometryGroup();
-  
-
-  Material diffuse = m_context->createMaterial();
-  Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
-        "aaf_gi.cu" ), "shadow" );
-  Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
-        "aaf_gi.cu" ), "closest_hit_direct" );
-  diffuse->setClosestHitProgram( 3, diffuse_p );
-  diffuse->setAnyHitProgram( 1, diffuse_ah );
-
-  diffuse["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
-  diffuse["Ks"]->setFloat( 0.f, 0.f, 0.f );
-  diffuse["phong_exp"]->setFloat( 1.f );
-  diffuse["obj_id"]->setInt(10);
-  
-  std::string objpath = std::string( sutilSamplesDir() ) + 
-    "/gi_research2/data/crytek_sponza/sponza_noflag.obj";
-  ObjLoader * conference_loader = new ObjLoader( objpath.c_str(), 
-      m_context, conference_geom_group, diffuse, true );
-  conference_loader->load();
-
-
-  // Declare these so validation will pass
-  m_context["vfov"]->setFloat( vfov );
-  m_context["spp_mu"]->setFloat(.8f);
-
-  
-  m_context["top_object"]->set( conference_geom_group );
-  m_context["top_shadower"]->set( conference_geom_group );
-  m_context["imp_samp_scale_diffuse"]->setFloat(.2f);
-  m_context["imp_samp_scale_specular"]->setFloat(0.f);
-
-}
-
-void GIScene::createSceneConference(InitialCameraData& camera_data)
-{
-  m_use_textures = true;
-  // Set up camera
-  const float vfov = 35.f;
-  //conference
-  //
-  camera_data = InitialCameraData( make_float3( -550.f, 420.f, -800.f ), // eye
-  make_float3( 500.f, 202.f, 451.f ),    // lookat
-      make_float3( 0.0f, 1.0f,  0.0f ),       // up
-      vfov );                                // vfov
-                              // vfov
-
-  ParallelogramLight light;
-  light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
-  light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
-  light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
-  light.normal   = normalize( cross(light.v1, light.v2) );
-  light.emission = make_float3( 15.0f, 15.0f, 5.0f );
-  
-  Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
-  light_buffer->setFormat( RT_FORMAT_USER );
-  light_buffer->setElementSize( sizeof( ParallelogramLight ) );
-  light_buffer->setSize( 1u );
-  memcpy( light_buffer->map(), &light, sizeof( light ) );
-  light_buffer->unmap();
-  m_context["lights"]->setBuffer( light_buffer ); 
-  
-  GeometryGroup conference_geom_group = m_context->createGeometryGroup();
-  
-
-  Material diffuse = m_context->createMaterial();
-  Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
-        "aaf_gi.cu" ), "shadow" );
-  Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
-        "aaf_gi.cu" ), "closest_hit_direct" );
-  diffuse->setClosestHitProgram( 3, diffuse_p );
-  diffuse->setAnyHitProgram( 1, diffuse_ah );
-
-  diffuse["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
-  diffuse["Ks"]->setFloat( 0.f, 0.f, 0.f );
-  diffuse["phong_exp"]->setFloat( 1.f );
-  
-  std::string objpath = std::string( sutilSamplesDir() ) + 
-    "/gi_research2/data/conference/conference_diffuse.obj";
-  ObjLoader * conference_loader = new ObjLoader( objpath.c_str(), 
-      m_context, conference_geom_group, diffuse, true );
-  conference_loader->load();
-
-  m_context["vfov"]->setFloat( vfov );
-  
-  m_context["top_object"]->set( conference_geom_group );
-  m_context["top_shadower"]->set( conference_geom_group );
-  m_context["spp_mu"]->setFloat(1.f);
-  m_context["imp_samp_scale_diffuse"]->setFloat(1.f);
-  m_context["imp_samp_scale_specular"]->setFloat(0.f);
+  m_context["alpha"]->setFloat(0.4f);
+  m_context["z_threshold"]->setFloat(5.f);
+  m_context["min_zmin"]->setFloat(0.08f);
 }
 
 void GIScene::createSceneCornell3(InitialCameraData& camera_data)
@@ -1477,11 +1363,402 @@ void GIScene::createSceneCornell3(InitialCameraData& camera_data)
   
   m_context["top_object"]->set( conference_geom_group );
   m_context["top_shadower"]->set( conference_geom_group );
-  m_context["spp_mu"]->setFloat(1.f);
-  m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
+  
+  m_context["spp_mu"]->setFloat(0.8f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(.4f);
   m_context["imp_samp_scale_specular"]->setFloat(0.1f);
+  
+  m_context["alpha"]->setFloat(1.f);
+  m_context["z_threshold"]->setFloat(5.f);
+  m_context["min_zmin"]->setFloat(0.08f);
 }
 
+void GIScene::createSceneCornell4(InitialCameraData& camera_data)
+{
+
+  m_use_textures = false;
+  // Set up camera
+  const float vfov = 35.f;
+
+  camera_data = InitialCameraData( 
+      make_float3( 278.0f, 550.0f, -700.0f ), // eye
+      make_float3( 278.0f, 273.0f, 0.0f ),    // lookat
+      make_float3( 0.0f, 1.0f,  0.0f ),       // up
+      35.0f );         // vfov
+
+
+
+  // Light buffer
+  ParallelogramLight light;
+  light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
+  light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
+  light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
+  light.normal   = normalize( cross(light.v1, light.v2) );
+  light.emission = make_float3( 15.0f, 15.0f, 5.0f );
+
+  Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
+  light_buffer->setFormat( RT_FORMAT_USER );
+  light_buffer->setElementSize( sizeof( ParallelogramLight ) );
+  light_buffer->setSize( 1u );
+  memcpy( light_buffer->map(), &light, sizeof( light ) );
+  light_buffer->unmap();
+  m_context["lights"]->setBuffer( light_buffer );
+  // Set up material
+  Material diffuse = m_context->createMaterial();
+  Material diffuse2 = m_context->createMaterial();
+  Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+        "aaf_gi.cu" ), "shadow" );
+  Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+        "aaf_gi.cu" ), "closest_hit_direct" );
+  diffuse->setClosestHitProgram( 3, diffuse_p );
+  diffuse->setAnyHitProgram( 1, diffuse_ah );
+  diffuse2->setClosestHitProgram( 3, diffuse_p );
+  diffuse2->setAnyHitProgram( 1, diffuse_ah );
+  
+  //dummy texture maps
+  diffuse["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.2f, 0.2f, 0.2f ) ) );
+  diffuse["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.8f, 0.8f, 0.8f ) ) );
+  diffuse["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.0f, 0.0f, 0.0f ) ) );
+  diffuse["Kd"]->setFloat(0.5,0.5,0.5);
+  diffuse["Ks"]->setFloat(0.,0.,0.);
+  diffuse["phong_exp"]->setFloat(1.);
+  diffuse2["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.0f, 0.0f, 0.0f ) ) );
+  diffuse2["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.0f, 0.0f, 0.0f ) ) );
+  diffuse2["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.0f, 0.0f, 0.0f ) ) );
+
+  diffuse2["Kd"]->setFloat(0.5,0.5,0.5);
+  diffuse2["Ks"]->setFloat(0.0,0.0,0.0);
+  diffuse2["phong_exp"]->setFloat(10.);
+
+  // Set up parallelogram programs
+  std::string ptx_path = ptxpath( "aaf_gi", "parallelogram.cu" );
+  m_pgram_bounding_box = m_context->createProgramFromPTXFile( ptx_path, 
+      "bounds" );
+  m_pgram_intersection = m_context->createProgramFromPTXFile( ptx_path, 
+      "intersect" );
+
+
+  // create geometry instances
+  std::vector<GeometryInstance> gis;
+
+  const float3 white = make_float3( 0.7f, 0.7f, 0.7f );
+  const float3 green = make_float3( 0.1f, 0.7f, 0.1f );
+  const float3 red   = make_float3( 0.7f, 0.1f, 0.1f );
+  const float3 light_em = make_float3( 15.0f, 15.0f, 15.0f );
+
+  // Floor
+  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ),
+                                      make_float3( 556.0f, 0.0f, 0.0f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Ceiling
+  gis.push_back( createParallelogram( make_float3( 0.0f, 548.8f, 0.0f ),
+                                      make_float3( 556.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Back wall
+  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 559.2f),
+                                      make_float3( 0.0f, 548.8f, 0.0f),
+                                      make_float3( 556.0f, 0.0f, 0.0f) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Right wall
+  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 548.8f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", green);
+
+  // Left wall
+  gis.push_back( createParallelogram( make_float3( 556.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ),
+                                      make_float3( 0.0f, 548.8f, 0.0f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", red);
+
+
+  GeometryGroup geom_group = m_context->createGeometryGroup(gis.begin(), 
+      gis.end());
+
+ Matrix4x4 bunny_xform = Matrix4x4::translate(make_float3(370,-50,270)) 
+    * Matrix4x4::rotate(M_PI + M_PI/3,make_float3(0,1,0))
+	* Matrix4x4::scale(make_float3(2000,2000,2000));
+    
+  std::string objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/bunny.obj";
+  ObjLoader * bunny_loader = new ObjLoader( objpath.c_str(), m_context, 
+      geom_group, diffuse, true );
+  bunny_loader->load(bunny_xform);
+
+  Matrix4x4 sphere_xform = Matrix4x4::translate(make_float3(170,250,270))
+    * Matrix4x4::scale(make_float3(200,200,200));
+
+   Matrix4x4 cube_xform = Matrix4x4::translate(make_float3(250,0,270))	
+    * Matrix4x4::rotate(M_PI-M_PI/8,make_float3(0,-1,0))
+    * Matrix4x4::scale(make_float3(150,150,150));
+    
+  objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/sphere.obj";
+  ObjLoader * sphere_loader = new ObjLoader( objpath.c_str(), m_context, 
+      geom_group, diffuse2, true );
+  sphere_loader->load(sphere_xform);
+
+  objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/cube.obj";
+  ObjLoader * cube_loader = new ObjLoader( objpath.c_str(), m_context, 
+      geom_group, diffuse2, true );
+  cube_loader->load(cube_xform);
+
+   // Declare these so validation will pass
+  m_context["vfov"]->setFloat( vfov );
+  m_context["top_object"]->set( geom_group );
+  m_context["top_shadower"]->set( geom_group );
+
+  m_context["spp_mu"]->setFloat(0.8f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(.4f);
+  m_context["imp_samp_scale_specular"]->setFloat(0.f);
+  
+  m_context["alpha"]->setFloat(0.4f);
+  m_context["z_threshold"]->setFloat(5.f);
+  m_context["min_zmin"]->setFloat(0.08f);
+  
+}
+
+void GIScene::createSceneCornell5(InitialCameraData& camera_data)
+{
+	m_use_textures = false;
+	// Set up camera
+	const float vfov = 30.f;
+
+	camera_data = InitialCameraData( 
+		make_float3( 0,0,4.8), // eye
+		make_float3( 0,0,-1 ), // lookat
+		make_float3( 0,1,0 ),       // up
+		vfov );         // vfov
+
+	// Light buffer
+	ParallelogramLight light;
+	light.corner   = make_float3( 0,0,1.5);
+	light.v1       = make_float3( 0.0f, 0.0f, 0.0f);
+	light.v2       = make_float3( 0.0f, 0.0f, 0.0f);
+	light.normal   = normalize( cross(light.v1, light.v2) );
+	light.emission = make_float3( 1,1,1 );
+
+	Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
+	light_buffer->setFormat( RT_FORMAT_USER );
+	light_buffer->setElementSize( sizeof( ParallelogramLight ) );
+	light_buffer->setSize( 1u );
+	memcpy( light_buffer->map(), &light, sizeof( light ) );
+	light_buffer->unmap();
+	m_context["lights"]->setBuffer( light_buffer );
+	// Set up material
+	Material* diffuse = new Material[6];
+	Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+		"aaf_gi.cu" ), "shadow" );
+	Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+		"aaf_gi.cu" ), "closest_hit_direct" );
+
+	for(int m=0; m<6; m++){
+		diffuse[m] = m_context->createMaterial();
+		diffuse[m]->setClosestHitProgram( 3, diffuse_p );
+		diffuse[m]->setAnyHitProgram( 1, diffuse_ah );
+		diffuse[m]["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
+			make_float3( 0.2f, 0.2f, 0.2f ) ) );
+		diffuse[m]["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
+			make_float3( 0.8f, 0.8f, 0.8f ) ) );
+		diffuse[m]["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
+			make_float3( 0.0f, 0.0f, 0.0f ) ) );
+
+	}
+
+	// Set up parallelogram programs
+	std::string ptx_path = ptxpath( "aaf_gi", "parallelogram.cu" );
+	m_pgram_bounding_box = m_context->createProgramFromPTXFile( ptx_path, 
+		"bounds" );
+	m_pgram_intersection = m_context->createProgramFromPTXFile( ptx_path, 
+		"intersect" );
+
+	// create geometry instances
+	std::vector<GeometryInstance> gis;
+
+	GeometryGroup geom_group = m_context->createGeometryGroup(gis.begin(), gis.end());
+
+	diffuse[0]["Kd"]->setFloat(0.9,0.9,0.9);
+	std::string objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/cornellBox_new/floorceil.obj";
+	ObjLoader * loader = new ObjLoader( objpath.c_str(), m_context, geom_group, diffuse[0], true );
+	loader->load();
+	objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/cornellBox_new/backWall.obj";
+	loader = new ObjLoader( objpath.c_str(), m_context, geom_group, diffuse[0], true );
+	loader->load();
+	objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/cornellBox_new/frontWall.obj";
+	loader = new ObjLoader( objpath.c_str(), m_context, geom_group, diffuse[0], true );
+	loader->load();
+	diffuse[1]["Kd"]->setFloat(0.9,0.9,0);
+	objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/cornellBox_new/rightWall.obj";
+	loader = new ObjLoader( objpath.c_str(), m_context, geom_group, diffuse[1], true );
+	loader->load();
+	diffuse[2]["Kd"]->setFloat(0,0.9,0.9);
+	objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/cornellBox_new/leftWall.obj";
+	loader = new ObjLoader( objpath.c_str(), m_context, geom_group, diffuse[2], true );
+	loader->load();
+	diffuse[3]["Kd"]->setFloat(0.3, 0.3, 0.3);
+	objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/cornellBox_new/rightBall.obj";
+	loader = new ObjLoader( objpath.c_str(), m_context, geom_group, diffuse[3], true );
+	loader->load();
+	diffuse[4]["Kd"]->setFloat(0.3, 0.3, 0.3);
+	objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/cornellBox_new/leftBall1.obj";
+	loader = new ObjLoader( objpath.c_str(), m_context, geom_group, diffuse[4], true );
+	loader->load();
+	diffuse[5]["Kd"]->setFloat(0.9, 0.45, 0.0);
+	objpath = std::string( sutilSamplesDir() ) + "/gi_research2/data/cornellBox_new/dragon.obj";
+	loader = new ObjLoader( objpath.c_str(), m_context, geom_group, diffuse[5], true );
+	loader->load();
+	
+	m_context["vfov"]->setFloat( vfov );
+	
+	m_context["top_object"]->set( geom_group );
+	m_context["top_shadower"]->set( geom_group );
+
+	m_context["spp_mu"]->setFloat(0.8f);
+	m_context["imp_samp_scale_diffuse"]->setFloat(.4f);
+	m_context["imp_samp_scale_specular"]->setFloat(0.f);
+	
+	m_context["alpha"]->setFloat(0.4f);
+	m_context["z_threshold"]->setFloat(5.f);
+	m_context["min_zmin"]->setFloat(0.08f);
+
+	m_context["primary_ray_epsilon"]->setFloat(3.3f);
+
+}
+
+void GIScene::createSceneCornell6(InitialCameraData& camera_data)
+{
+
+
+m_use_textures = false;
+// Set up camera
+const float vfov = 35.f;
+
+//cornell
+camera_data = InitialCameraData( 
+make_float3( 278.0f, 273.0f, -800.0f ), // eye
+make_float3( 278.0f, 273.0f, 0.0f ),    // lookat
+make_float3( 0.0f, 1.0f,  0.0f ),       // up
+vfov );                                // vfov
+
+// Light buffer
+ParallelogramLight light;
+light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
+light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
+light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
+light.normal   = normalize( cross(light.v1, light.v2) );
+light.emission = make_float3( 15.0f, 15.0f, 5.0f );
+
+Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
+light_buffer->setFormat( RT_FORMAT_USER );
+light_buffer->setElementSize( sizeof( ParallelogramLight ) );
+light_buffer->setSize( 1u );
+memcpy( light_buffer->map(), &light, sizeof( light ) );
+light_buffer->unmap();
+m_context["lights"]->setBuffer( light_buffer );
+// Set up material
+Material diffuse = m_context->createMaterial();
+Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+"aaf_gi.cu" ), "shadow" );
+Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+"aaf_gi.cu" ), "closest_hit_direct" );
+diffuse->setClosestHitProgram( 3, diffuse_p );
+diffuse->setAnyHitProgram( 1, diffuse_ah );
+
+//dummy texture maps
+diffuse["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
+make_float3( 0.2f, 0.2f, 0.2f ) ) );
+diffuse["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
+make_float3( 0.8f, 0.8f, 0.8f ) ) );
+diffuse["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
+make_float3( 0.0f, 0.0f, 0.0f ) ) );
+diffuse["Kd"]->setFloat(0.5,0.5,1.5);
+diffuse["Ks"]->setFloat(0.,0.,0.);
+diffuse["phong_exp"]->setFloat(12.f);
+
+// Set up parallelogram programs
+std::string ptx_path = ptxpath( "aaf_gi", "parallelogram.cu" );
+m_pgram_bounding_box = m_context->createProgramFromPTXFile( ptx_path, 
+"bounds" );
+m_pgram_intersection = m_context->createProgramFromPTXFile( ptx_path, 
+"intersect" );
+
+// create geometry instances
+std::vector<GeometryInstance> gis;
+
+const float3 white = make_float3( 0.8f, 0.8f, 0.8f );
+const float3 green = make_float3( 0.05f, 0.8f, 0.05f );
+const float3 red   = make_float3( 0.8f, 0.05f, 0.05f );
+const float3 cyan_sph = make_float3( 0.486, 0.631, 0.663 );
+const float3 cyan_sph_spec = make_float3( 0.7 );
+const float3 black = make_float3( 0.f, 0.f, 0.f );
+const float3 light_em = make_float3( 15.0f, 15.0f, 5.0f );
+
+// Floor
+gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+make_float3( 0.0f, 0.0f, 559.2f ),
+make_float3( 556.0f, 0.0f, 0.0f ) ) );
+setMaterial(gis.back(), diffuse, "Kd", white);
+
+// Ceiling
+gis.push_back( createParallelogram( make_float3( 0.0f, 548.8f, 0.0f ),
+make_float3( 556.0f, 0.0f, 0.0f ),
+make_float3( 0.0f, 0.0f, 559.2f ) ) );
+setMaterial(gis.back(), diffuse, "Kd", white);
+
+// Back wall
+gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 559.2f),
+make_float3( 0.0f, 548.8f, 0.0f),
+make_float3( 556.0f, 0.0f, 0.0f) ) );
+setMaterial(gis.back(), diffuse, "Kd", white);
+
+// Right wall
+gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+make_float3( 0.0f, 548.8f, 0.0f ),
+make_float3( 0.0f, 0.0f, 559.2f ) ) );
+setMaterial(gis.back(), diffuse, "Kd", green);
+
+// Left wall
+gis.push_back( createParallelogram( make_float3( 556.0f, 0.0f, 0.0f ),
+make_float3( 0.0f, 0.0f, 559.2f ),
+make_float3( 0.0f, 548.8f, 0.0f ) ) );
+setMaterial(gis.back(), diffuse, "Kd", red);
+
+//sphere
+
+std::string sphere_ptx( ptxpath("aaf_gi", "sphere.cu") );
+m_pgram_sph_bounding_box = 
+	m_context->createProgramFromPTXFile(sphere_ptx, "bounds");
+m_pgram_sph_intersection = 
+	m_context->createProgramFromPTXFile(sphere_ptx, "intersect");
+gis.push_back(
+	createSphere(make_float3(250,100,350),100));
+setMaterial(gis.back(), diffuse, "Kd", cyan_sph);
+setMaterial(gis.back(), diffuse, "Ks", cyan_sph_spec);
+
+
+// Create geometry group
+GeometryGroup geometry_group = m_context->createGeometryGroup(gis.begin(), 
+gis.end());
+geometry_group->setAcceleration( m_context->createAcceleration("Bvh","Bvh"));
+m_context["top_object"]->set( geometry_group );
+m_context["vfov"]->setFloat( vfov );
+m_context["spp_mu"]->setFloat(1.f);
+m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
+m_context["imp_samp_scale_specular"]->setFloat(0.1f);
+
+m_context["alpha"]->setFloat(1.f);
+m_context["z_threshold"]->setFloat(5.f);
+m_context["min_zmin"]->setFloat(0.08f);
+}
 //-----------------------------------------------------------------------------
 //
 // main

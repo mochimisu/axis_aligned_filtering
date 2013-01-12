@@ -25,6 +25,7 @@ using namespace optix;
 
 rtDeclareVariable(float4,  sphere, , );
 
+rtDeclareVariable(float3, texcoord, attribute texcoord, ); 
 rtDeclareVariable(float3, geometric_normal, attribute geometric_normal, ); 
 rtDeclareVariable(float3, shading_normal, attribute shading_normal, ); 
 rtDeclareVariable(optix::Ray, ray, rtCurrentRay, );
@@ -41,6 +42,7 @@ void intersect_sphere(void)
   float b = dot(O, D);
   float c = dot(O, O)-radius*radius;
   float disc = b*b-c;
+  texcoord = make_float3(0);
   if(disc > 0.0f){
     float sdisc = sqrtf(disc);
     float root1 = (-b - sdisc);
