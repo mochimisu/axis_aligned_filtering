@@ -19,8 +19,8 @@
 // 6: Cornell box 4 (Soham's w/ objs) (Diffuse)
 // 7: Cornell box 5  (Comparison Diffuse)
 // 8: Cornell box 6  (Simple Glossy)
-#define SCENE 8
-#define COPY_SPECULAR
+#define SCENE 2
+//#define COPY_SPECULAR
 
 //number of maximum samples per pixel
 #define MAX_SPP 100
@@ -28,7 +28,7 @@
 //#define MAX_SPP 25
 
 //depth of indirect bounces
-#define INDIRECT_BOUNCES 2
+#define INDIRECT_BOUNCES 1
 
 //default width, height
 #define WIDTH 640u
@@ -39,7 +39,7 @@
 //#define HEIGHT 1024u
 
 //timings (on windows only)
-#define WINDOWS_TIME
+//#define WINDOWS_TIME
 
 //=== End config
 
@@ -200,8 +200,8 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context->setEntryPointCount( 4 );
   m_context->setStackSize( 1800 );
 
-  m_context["scene_epsilon"]->setFloat( 0.01f );
-  m_context["primary_ray_epsilon"]->setFloat(0.01f);
+  m_context["scene_epsilon"]->setFloat( 0.02f );
+  m_context["primary_ray_epsilon"]->setFloat(0.02f);
   m_context["max_depth"]->setUint(m_max_depth);
   m_context["pathtrace_shadow_ray_type"]->setUint(1u);
   m_context["pathtrace_bsdf_shadow_ray_type"]->setUint(2u);
@@ -1651,7 +1651,7 @@ vfov );                                // vfov
 
 // Light buffer
 ParallelogramLight light;
-light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
+light.corner   = make_float3( 343.0f, 548.6f, 80.0f);
 light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
 light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
 light.normal   = normalize( cross(light.v1, light.v2) );
@@ -1740,10 +1740,14 @@ m_pgram_sph_bounding_box =
 m_pgram_sph_intersection = 
 	m_context->createProgramFromPTXFile(sphere_ptx, "intersect");
 gis.push_back(
-	createSphere(make_float3(250,100,350),100));
+	createSphere(make_float3(125,100,250),100));
+setMaterial(gis.back(), diffuse, "Kd", white);
+setMaterial(gis.back(), diffuse, "Ks", white);
+
+gis.push_back(
+	createSphere(make_float3(400,150,350),150));
 setMaterial(gis.back(), diffuse, "Kd", cyan_sph);
 setMaterial(gis.back(), diffuse, "Ks", cyan_sph_spec);
-
 
 // Create geometry group
 GeometryGroup geometry_group = m_context->createGeometryGroup(gis.begin(), 
@@ -1751,13 +1755,13 @@ gis.end());
 geometry_group->setAcceleration( m_context->createAcceleration("Bvh","Bvh"));
 m_context["top_object"]->set( geometry_group );
 m_context["vfov"]->setFloat( vfov );
-m_context["spp_mu"]->setFloat(1.f);
-m_context["imp_samp_scale_diffuse"]->setFloat(0.4f);
-m_context["imp_samp_scale_specular"]->setFloat(0.1f);
+m_context["spp_mu"]->setFloat(0.8f);
+m_context["imp_samp_scale_diffuse"]->setFloat(0.9f);
+m_context["imp_samp_scale_specular"]->setFloat(0.2f);
 
 m_context["alpha"]->setFloat(1.f);
 m_context["z_threshold"]->setFloat(5.f);
-m_context["min_zmin"]->setFloat(0.08f);
+m_context["min_zmin"]->setFloat(0.1f);
 }
 //-----------------------------------------------------------------------------
 //

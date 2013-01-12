@@ -4,9 +4,9 @@
 #include "aaf_gi.h"
 #include "random.h"
 
-#define MULTI_BOUNCE
-#define SAMPLE_SPECULAR
-#define FILTER_SPECULAR
+//#define MULTI_BOUNCE
+//#define SAMPLE_SPECULAR
+//#define FILTER_SPECULAR
 
 #define MAX_FILT_RADIUS 50.f
 #define OHMAX 2.8f
@@ -745,7 +745,7 @@ RT_PROGRAM void display()
 	//output_buffer[launch_index] = make_float4(direct_illum[launch_index]);
 
 	output_buffer[launch_index] = make_float4(
-		direct_illum[launch_index] + 
+		direct_illum[launch_index] +
 		indirect_illum[launch_index] * Kd_image[launch_index] +
 		indirect_illum_spec[launch_index] * Ks_image[launch_index]
 	  ,1.f);
