@@ -4,7 +4,7 @@
 #include "aaf_gi.h"
 #include "random.h"
 
-#define MULTI_BOUNCE
+//#define MULTI_BOUNCE
 #define SAMPLE_SPECULAR
 #define FILTER_SPECULAR
 
@@ -508,9 +508,10 @@ RT_PROGRAM void sample_aaf_pass2()
 	float spp_sqrt = sqrt(spp);
 	int spp_sqrt_int = (int) ceil(spp_sqrt);
 	int spp_int = spp_sqrt_int * spp_sqrt_int;
-	target_spb[launch_index] = spp_int;
 #ifndef MULTI_BOUNCE
 	target_spb[launch_index] = spp_int + 16;
+#else
+	target_spb[launch_index] = spp_int;
 #endif
 
 	
