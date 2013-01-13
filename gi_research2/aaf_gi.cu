@@ -5,8 +5,8 @@
 #include "random.h"
 
 //#define MULTI_BOUNCE
-//#define SAMPLE_SPECULAR
-//#define FILTER_SPECULAR
+#define SAMPLE_SPECULAR
+#define FILTER_SPECULAR
 
 #define MAX_FILT_RADIUS 50.f
 #define OHMAX 2.8f
@@ -151,7 +151,7 @@ rtBuffer<float, 2>                 target_spb_spec;
 
 //omegaxf and sampling functions
 __device__ __inline__ float glossy_blim(float m){
-	return 3.5 + 0.2*m;
+	return 4.27 + 0.15*m;
 }
 
 // sample hemisphere with cosine^n density
@@ -396,7 +396,11 @@ RT_PROGRAM void sample_aaf()
 	Ks_image[launch_index] = dir_samp.Ks;
 
 	cur_depth = dir_samp.z_dist;
-
+	
+	//indirect sampling
+	float3 first_hit = dir_samp.world_loc;
+	float3 normal = dir_samp.norm;
+	float3 prev_dir = normalize(first_hit-eye);
 
 	int initial_bucket_samples = first_pass_spb_sqrt
 		* first_pass_spb_sqrt;
@@ -418,7 +422,7 @@ RT_PROGRAM void sample_aaf()
 			/first_pass_spb_sqrt;
 
 		//dont accept "grazing" angles
-		rand_samp.y *= 0.95f;
+		//rand_samp.y *= 0.95f;
 		sampleUnitHemisphere(rand_samp, n_u, n_v, n_w, sample_dir);
 
 		PerRayData_direct indir_samp;
@@ -430,6 +434,17 @@ RT_PROGRAM void sample_aaf()
 		{
 			cur_zdist.x = clamp(indir_samp.z_dist, min_zmin, cur_zdist.x);
 			cur_zdist.y = max(cur_zdist.y, indir_samp.z_dist);
+
+			
+#ifndef MULTI_BOUNCE
+			float3 R = normalize(2*normal*dot(normal, sample_dir)-sample_dir);
+			float nDr = max(dot(-prev_dir, R), 0.f);
+			float3 incoming_light = indir_samp.incoming_specular_light * indir_samp.Ks 
+				+ indir_samp.incoming_diffuse_light * indir_samp.Kd;
+
+			finfo.indirect_diffuse += incoming_light;
+		    finfo.indirect_specular += incoming_light*pow(nDr, dir_samp.phong_exp);
+#endif
 		}
 	}
 
@@ -463,9 +478,15 @@ RT_PROGRAM void sample_aaf()
 	float Ks_mag = length(dir_samp.Ks);
 	float Kd_Ks_ratio = Kd_mag/(Kd_mag+Ks_mag);
 	
-	spp = clampVal(spp * Kd_Ks_ratio, 0.f, (float)spp_mu*max_spb_pass);
+	spp = clampVal(spp * Kd_Ks_ratio, 16.f, (float)spp_mu*max_spb_pass);
 	spec_spp = clampVal(spec_spp * (1.f-Kd_Ks_ratio), 
-	0.f, (float) spp_mu*max_spb_spec_pass);
+	16.f, (float) spp_mu*max_spb_spec_pass);
+	
+#ifndef MULTI_BOUNCE	//reduce by 16 to account for first pass
+	spp -= 16;
+	spec_spp -= 16;
+#endif
+
 
 	float spp_sqrt = sqrt(spp);
 	int spp_sqrt_int = (int) ceil(spp_sqrt);
@@ -485,8 +506,8 @@ RT_PROGRAM void sample_aaf()
 #endif
 
 	//indirect sampling
-	float3 first_hit = dir_samp.world_loc;
-	float3 normal = dir_samp.norm;
+	//float3 first_hit = dir_samp.world_loc;
+	//float3 normal = dir_samp.norm;
 
 	for (int samp = 0; samp < spp_int; ++samp)
 	{
@@ -497,7 +518,7 @@ RT_PROGRAM void sample_aaf()
 		float3 sample_dir;
 		float3 sample_diffuse_color = make_float3(0);
 		float3 sample_specular_color = make_float3(0);
-		float3 prev_dir = normalize(first_hit-eye);
+		prev_dir = normalize(first_hit-eye);
 		float3 prev_Kd = make_float3(1.f);
 		float3 prev_Ks = make_float3(1.f);
 		float prev_phong_exp = dir_samp.phong_exp;
@@ -553,7 +574,7 @@ RT_PROGRAM void sample_aaf()
 		float3 ray_origin = first_hit;
 		float3 ray_n = normal;
 		float3 rns_u, rns_v, rns_w;
-		float3 prev_dir = normalize(first_hit-eye);
+		prev_dir = normalize(first_hit-eye);
 
 		float3 sample_dir;
 		float3 sample_diffuse_color = make_float3(0);
@@ -617,12 +638,20 @@ RT_PROGRAM void sample_aaf()
 		finfo.indirect_diffuse += sample_diffuse_color;
 		finfo.indirect_specular += sample_specular_color;
 	}
-	finfo.indirect_specular /= (float)spp_int+spp_spec_int;
-#else
-	finfo.indirect_specular /= (float)spp_int;
 #endif
+	float num_diffuse_samples = spp_int;
+	float num_specular_samples = 0.f;
+
+#ifdef SAMPLE_SPECULAR
+	num_specular_samples = spp_int + spp_spec_int;
+#endif
+#ifndef MULTI_BOUNCE
+	num_diffuse_samples += 16;
+	num_specular_samples += 16;
+#endif
+	finfo.indirect_specular /= num_specular_samples;
+	finfo.indirect_diffuse /= num_diffuse_samples;
 	//incoming_diff_indirect /= (float)spp_int+spp_spec_int;
-	finfo.indirect_diffuse /= (float)spp_int;
 	//incoming_spec_indirect /= (float)spp_int;
 
 	finfo.zmin = cur_zdist.x;
@@ -746,9 +775,23 @@ RT_PROGRAM void display()
 
 	output_buffer[launch_index] = make_float4(
 		direct_illum[launch_index] +
-		indirect_illum[launch_index] * Kd_image[launch_index] +
+		indirect_illum[launch_index] * Kd_image[launch_index]	 +
 		indirect_illum_spec[launch_index] * Ks_image[launch_index]
 	  ,1.f);
+
+
+	  if (view_mode)
+	  {
+		  if (view_mode == 1)
+		  {
+			  filter_info finfo = filter_info_in[launch_index];
+			  output_buffer[launch_index] = make_float4(
+				  direct_illum[launch_index] +
+			  finfo.indirect_diffuse * Kd_image[launch_index] + 
+			  finfo.indirect_specular * Ks_image[launch_index]
+			  ,1.f);
+		  }
+	  }
 	  /*
 	  output_buffer[launch_index] = make_float4(
 		  filter_info_in[launch_index].indirect_specular);
@@ -802,5 +845,138 @@ RT_PROGRAM void display()
             indirect_illum_spec_combined,1);
     }
   }*/
+
+}
+
+
+
+rtBuffer<filter_info, 2>          filter_info_gt;
+rtDeclareVariable(float, gt_sqrt_samp_pass, ,);
+
+RT_PROGRAM void display_gt()
+{	filter_info finfo = filter_info_gt[launch_index];	output_buffer[launch_index] = make_float4(
+		//direct_illum[launch_index] +
+		(finfo.indirect_diffuse * Kd_image[launch_index] + 
+		finfo.indirect_specular * Ks_image[launch_index])/finfo.proj_dist
+	,1.f);
+
+	if(view_mode)
+		output_buffer[launch_index] = make_float4(
+		//direct_illum[launch_index] +
+		( 
+		finfo.indirect_specular * Ks_image[launch_index])/finfo.proj_dist
+		,1.f);
+}
+
+RT_PROGRAM void sample_aaf_gt()
+{
+	size_t2 screen = direct_illum.size();
+
+	filter_info finfo = filter_info_gt[launch_index];
+
+	//direct sample
+	float3 ray_origin = eye;
+	float2 d = make_float2(launch_index)/make_float2(screen) * 2.f - 1.f;
+	float3 ray_direction = normalize(d.x*U + d.y*V + W);
+
+	indirect_illum[launch_index] = make_float3(0);
+	indirect_illum_spec[launch_index] = make_float3(0);
+
+	PerRayData_direct dir_samp;
+	dir_samp.hit = false;
+	Ray ray = make_Ray(ray_origin, ray_direction, direct_ray_type, 
+		primary_ray_epsilon, RT_DEFAULT_MAX);
+	rtTrace(top_object, ray, dir_samp);
+
+	float2 cur_zdist = make_float2(10000000000.f,scene_epsilon);
+	float cur_depth;
+	if (frame_number == 1)
+	{
+		finfo.indirect_diffuse = make_float3(0);
+		finfo.indirect_specular = make_float3(0);
+		finfo.proj_dist = 0.f;
+	}
+
+
+	if (!dir_samp.hit) {
+		direct_illum[launch_index] = make_float3(0.34f,0.55f,0.85f);
+		target_spb_theoretical[launch_index] = 0;
+		target_spb[launch_index] = 0;
+		target_spb_spec_theoretical[launch_index] = 0;
+		target_spb_spec[launch_index] = 0;
+		finfo.valid = false;
+		filter_info_out[launch_index] = finfo;
+		return;
+	}
+	direct_illum[launch_index] = dir_samp.incoming_diffuse_light * dir_samp.Kd
+		+ dir_samp.incoming_specular_light * dir_samp.Ks;
+	finfo.valid = true;
+	finfo.world_loc = dir_samp.world_loc;
+	finfo.n = dir_samp.norm;
+	finfo.zmin = 1000000000.f;
+	finfo.spec_wvmax = glossy_blim(dir_samp.phong_exp);
+
+	Kd_image[launch_index] = dir_samp.Kd;
+	Ks_image[launch_index] = dir_samp.Ks;
+
+	cur_depth = dir_samp.z_dist;
+
+	//indirect sampling
+	float3 first_hit = dir_samp.world_loc;
+	float3 normal = dir_samp.norm;
+	float3 prev_dir = normalize(first_hit-eye);
+
+	int num_pass_sqrt = gt_sqrt_samp_pass;
+
+	int initial_bucket_samples = num_pass_sqrt*num_pass_sqrt;
+
+
+	float3 n_u, n_v, n_w;
+	createONB(dir_samp.norm, n_u, n_v, n_w);
+	unsigned int seed = tea<16>(screen.x*launch_index.y+launch_index.x,
+		frame_number);
+
+	for(int samp = 0; samp < initial_bucket_samples; ++samp)
+	{
+		float3 sample_dir;
+		float2 rand_samp = make_float2(rnd(seed),rnd(seed));
+		//stratify x,y
+		rand_samp.x = (samp%num_pass_sqrt + rand_samp.x)
+			/num_pass_sqrt;
+		rand_samp.y = (((int)samp/num_pass_sqrt) + rand_samp.y)
+			/num_pass_sqrt;
+
+		//dont accept "grazing" angles
+		//rand_samp.y *= 0.95f;
+		sampleUnitHemisphere(rand_samp, n_u, n_v, n_w, sample_dir);
+
+		PerRayData_direct indir_samp;
+		indir_samp.hit = false;
+		Ray indir_ray = make_Ray(dir_samp.world_loc, sample_dir,
+			direct_ray_type, scene_epsilon, RT_DEFAULT_MAX);
+		rtTrace(top_object, indir_ray, indir_samp);
+		if (indir_samp.hit)
+		{
+			cur_zdist.x = clamp(indir_samp.z_dist, min_zmin, cur_zdist.x);
+			cur_zdist.y = max(cur_zdist.y, indir_samp.z_dist);
+
+
+#ifndef MULTI_BOUNCE
+			float3 R = normalize(2*normal*dot(normal, sample_dir)-sample_dir);
+			float nDr = max(dot(-prev_dir, R), 0.f);
+			float3 incoming_light = indir_samp.incoming_specular_light * indir_samp.Ks 
+				+ indir_samp.incoming_diffuse_light * indir_samp.Kd;
+
+			finfo.indirect_diffuse += incoming_light;
+			finfo.indirect_specular += incoming_light*pow(nDr, dir_samp.phong_exp);
+#endif
+		}
+	}
+
+	//use proj dist for the sample count
+	finfo.proj_dist += initial_bucket_samples;
+	target_spb[launch_index ] = finfo.proj_dist;
+
+	filter_info_gt[launch_index] = finfo;
 
 }

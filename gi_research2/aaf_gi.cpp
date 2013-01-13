@@ -19,8 +19,12 @@
 // 6: Cornell box 4 (Soham's w/ objs) (Diffuse)
 // 7: Cornell box 5  (Comparison Diffuse)
 // 8: Cornell box 6  (Simple Glossy)
-#define SCENE 2
-//#define COPY_SPECULAR
+#define SCENE 8
+#define COPY_SPECULAR
+
+//gt: only one bounce for now
+//#define GROUNDTRUTH
+//#define GT_SAMP 4000
 
 //number of maximum samples per pixel
 #define MAX_SPP 100
@@ -225,7 +229,27 @@ void GIScene::initScene( InitialCameraData& camera_data )
         "miss" ) );
 
   m_context["frame_number"]->setUint(1);
+#ifdef GROUNDTRUTH
+  Buffer finfo_gt_buf = m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+	  RT_FORMAT_USER, m_width, m_height);
+  finfo_gt_buf->setElementSize(sizeof(filter_info));
+  m_context["filter_info_gt"]->set(finfo_gt_buf);
+  Program sample_prog = m_context->createProgramFromPTXFile(
+  ptx_path, "sample_aaf_gt");
+  Program ind_filt_first_prog = m_context->createProgramFromPTXFile(
+  ptx_path, "indirect_filter_first_pass");
+  Program ind_filt_second_prog = m_context->createProgramFromPTXFile(
+  ptx_path, "indirect_filter_second_pass");
+  Program display_prog = m_context->createProgramFromPTXFile(
+  ptx_path, "display_gt");
+  m_context->setRayGenerationProgram( 0, sample_prog );
+  m_context->setRayGenerationProgram( 1, ind_filt_first_prog );
+  m_context->setRayGenerationProgram( 2, ind_filt_second_prog );
+  m_context->setRayGenerationProgram( 3, display_prog );
 
+  int sqrt_samp_pass = floor(sqrt((float)MAX_SPP));
+  m_context["gt_sqrt_samp_pass"]->setFloat(sqrt_samp_pass);
+#else
   // AAF programs
   Program sample_prog = m_context->createProgramFromPTXFile(
       ptx_path, "sample_aaf");
@@ -239,6 +263,7 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context->setRayGenerationProgram( 1, ind_filt_first_prog );
   m_context->setRayGenerationProgram( 2, ind_filt_second_prog );
   m_context->setRayGenerationProgram( 3, display_prog );
+#endif
 
   m_context["direct_ray_type"]->setUint(3u);
   m_context["indirect_ray_type"]->setUint(4u);
@@ -253,6 +278,7 @@ void GIScene::initScene( InitialCameraData& camera_data )
   uint mult_gpu_type = RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL;
   uint input_type = RT_BUFFER_INPUT;
   uint output_type = RT_BUFFER_OUTPUT;
+
 
   //input_type = output_type = RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL;
   //uint mult_gpu_type = RT_BUFFER_INPUT_OUTPUT;
@@ -450,7 +476,7 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
           {
             //copy every 3, ignore alpha channel
             //image is upside down
-            memcpy(&output[(i+(buffer_height-j)*buffer_width)*3], 
+            memcpy(&output[(i+j*buffer_width)*3], 
                 &outbuf_float_vals[i+j*buffer_width], sizeof(float)*3);
             max_val = max(max_val, outbuf_float_vals[i+j*buffer_width].x);
             max_val = max(max_val, outbuf_float_vals[i+j*buffer_width].y);
@@ -612,6 +638,7 @@ bool GIScene::keyPressed( unsigned char key, int x, int y )
 }
 
 
+#ifndef GROUNDTRUTH
 void GIScene::trace( const RayGenCameraData& camera_data )
 {
   m_context["eye"]->setFloat( camera_data.eye );
@@ -723,6 +750,42 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 #endif
 
 }
+#else
+void GIScene::trace( const RayGenCameraData& camera_data )
+{
+m_context["eye"]->setFloat( camera_data.eye );
+m_context["U"]->setFloat( camera_data.U );
+m_context["V"]->setFloat( camera_data.V );
+m_context["W"]->setFloat( camera_data.W );
+
+Buffer buffer = m_context["output_buffer"]->getBuffer();
+RTsize buffer_width, buffer_height;
+buffer->getSize( buffer_width, buffer_height );
+
+if( m_camera_changed ) {
+m_camera_changed = false;
+m_frame = 0;
+}
+
+m_context["frame_number"]->setUint( m_frame++ );
+
+int sqrt_samp_pass = floor(sqrt((float)MAX_SPP));
+
+#ifdef WINDOWS_TIME
+StartCounter();
+#endif
+//direct
+if((m_frame*sqrt_samp_pass) < GT_SAMP)
+m_context->launch( 0, static_cast<unsigned int>(buffer_width), 
+static_cast<unsigned int>(buffer_height));
+//display
+m_context->launch( 3, static_cast<unsigned int>(buffer_width), 
+static_cast<unsigned int>(buffer_height));
+//std::cout << "frame: " << m_frame << std::endl;
+
+
+}
+#endif
 
 
 //-----------------------------------------------------------------------------
@@ -1698,7 +1761,7 @@ const float3 white = make_float3( 0.8f, 0.8f, 0.8f );
 const float3 green = make_float3( 0.05f, 0.8f, 0.05f );
 const float3 red   = make_float3( 0.8f, 0.05f, 0.05f );
 const float3 cyan_sph = make_float3( 0.486, 0.631, 0.663 );
-const float3 cyan_sph_spec = make_float3( 0.7 );
+const float3 cyan_sph_spec = make_float3( 2.f );
 const float3 black = make_float3( 0.f, 0.f, 0.f );
 const float3 light_em = make_float3( 15.0f, 15.0f, 5.0f );
 
@@ -1757,7 +1820,7 @@ m_context["top_object"]->set( geometry_group );
 m_context["vfov"]->setFloat( vfov );
 m_context["spp_mu"]->setFloat(0.8f);
 m_context["imp_samp_scale_diffuse"]->setFloat(0.9f);
-m_context["imp_samp_scale_specular"]->setFloat(0.2f);
+m_context["imp_samp_scale_specular"]->setFloat(0.4f);
 
 m_context["alpha"]->setFloat(1.f);
 m_context["z_threshold"]->setFloat(5.f);
