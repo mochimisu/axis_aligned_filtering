@@ -4,9 +4,11 @@
 #include "aaf_gi.h"
 #include "random.h"
 
-//#define MULTI_BOUNCE
+#define MULTI_BOUNCE
 #define SAMPLE_SPECULAR
 #define FILTER_SPECULAR
+
+//#define TWOPASS_SAMPLING
 
 #define MAX_FILT_RADIUS 50.f
 #define OHMAX 2.8f
@@ -87,18 +89,7 @@ RT_PROGRAM void shadow()
 
 // AAF GI
 //=========
-struct PerRayData_direct
-{
-  float3 world_loc;
-  float3 incoming_diffuse_light;
-  float3 incoming_specular_light;
-  float3 norm;
-  float3 Kd;
-  float3 Ks;
-  float phong_exp;
-  float z_dist;
-  bool hit;
-};
+
 rtBuffer<float3, 2>               direct_illum;
 rtBuffer<float3, 2>               indirect_illum;
 rtBuffer<float3, 2>               indirect_illum_filter1d_out;
@@ -147,6 +138,13 @@ rtDeclareVariable(float, imp_samp_scale_specular, ,);
 
 rtBuffer<float, 2>                 target_spb_spec_theoretical;
 rtBuffer<float, 2>                 target_spb_spec;
+
+#ifdef TWOPASS_SAMPLING
+rtBuffer<filter_info, 2>          filter_info_twopass;
+rtBuffer<PerRayData_direct, 2>          dir_samp_twopass;
+rtBuffer<float2, 2>				  zdist_twopass;
+#endif
+
 
 
 //omegaxf and sampling functions
@@ -447,9 +445,28 @@ RT_PROGRAM void sample_aaf()
 #endif
 		}
 	}
+	// -_-
+#ifdef TWOPASS_SAMPLING
+	filter_info_twopass[launch_index] = finfo;
+	dir_samp_twopass[launch_index] = dir_samp;
+	zdist_twopass[launch_index] = cur_zdist;
+}
+
+RT_PROGRAM void sample_aaf_pass2()
+{
+	PerRayData_direct dir_samp = dir_samp_twopass[launch_index];
+	filter_info finfo = filter_info_twopass[launch_index];
+	float2 cur_zdist = zdist_twopass[launch_index];
+	size_t2 screen = direct_illum.size();
+	unsigned int seed = tea<16>(screen.x*launch_index.y+launch_index.x,
+	frame_number);
+	float3 first_hit = dir_samp.world_loc;
+	float3 normal = dir_samp.norm;
+	float3 prev_dir = normalize(first_hit-eye);
+#endif
 
 	// spp
-	float proj_dist = 2.f/screen.y * cur_depth 
+	float proj_dist = 2.f/screen.y * dir_samp.z_dist
 		* tan(vfov/2.f*M_PI/180.f);
 	finfo.proj_dist = proj_dist;
 	//what is this for?
@@ -492,6 +509,9 @@ RT_PROGRAM void sample_aaf()
 	int spp_sqrt_int = (int) ceil(spp_sqrt);
 	int spp_int = spp_sqrt_int * spp_sqrt_int;
 	target_spb[launch_index] = spp_int;
+#ifndef MULTI_BOUNCE
+	target_spb[launch_index] = spp_int + 16;
+#endif
 
 	
 #ifdef SAMPLE_SPECULAR

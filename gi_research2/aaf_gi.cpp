@@ -43,7 +43,9 @@
 //#define HEIGHT 1024u
 
 //timings (on windows only)
-//#define WINDOWS_TIME
+#define WINDOWS_TIME
+
+//#define TWOPASS_SAMPLING
 
 //=== End config
 
@@ -76,7 +78,7 @@ using namespace optix;
 #define NUM_BUFFER_FRAMES 10u
 double pc_freq = 0.;
 __int64 counter_start = 0;
-double timings [5] = {0., 0., 0., 0., 0.};
+double timings [6] = {0., 0., 0., 0., 0., 0.};
 
 void StartCounter()
 {
@@ -202,6 +204,9 @@ void GIScene::initScene( InitialCameraData& camera_data )
 {
   m_context->setRayTypeCount( 5 );
   m_context->setEntryPointCount( 4 );
+#ifdef TWOPASS_SAMPLING
+  m_context->setEntryPointCount( 5 );
+#endif
   m_context->setStackSize( 1800 );
 
   m_context["scene_epsilon"]->setFloat( 0.02f );
@@ -263,6 +268,22 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context->setRayGenerationProgram( 1, ind_filt_first_prog );
   m_context->setRayGenerationProgram( 2, ind_filt_second_prog );
   m_context->setRayGenerationProgram( 3, display_prog );
+#endif
+
+#ifdef TWOPASS_SAMPLING
+  Program sample_prog2 = m_context->createProgramFromPTXFile(
+	  ptx_path, "sample_aaf_pass2");
+  m_context->setRayGenerationProgram( 4, sample_prog2 );  Buffer finfo_2p_buf = m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+	  RT_FORMAT_USER, m_width, m_height);
+  Buffer dir_samp_2p_buf = m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+	  RT_FORMAT_USER, m_width, m_height);
+  finfo_2p_buf->setElementSize(sizeof(filter_info));
+  dir_samp_2p_buf->setElementSize(sizeof(PerRayData_direct));
+  m_context["filter_info_twopass"]->set(finfo_2p_buf);
+  m_context["dir_samp_twopass"]->set(dir_samp_2p_buf);
+  m_context["zdist_twopass"]->set(
+      m_context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL,
+        RT_FORMAT_FLOAT2, m_width, m_height));
 #endif
 
   m_context["direct_ray_type"]->setUint(3u);
@@ -664,9 +685,19 @@ void GIScene::trace( const RayGenCameraData& camera_data )
   m_context->launch( 0, static_cast<unsigned int>(buffer_width), 
 	  static_cast<unsigned int>(buffer_height));
 #ifdef WINDOWS_TIME
-  if(m_frame > NUM_BUFFER_FRAMES)
-	  timings[0] += GetCounter();
-  StartCounter();
+if(m_frame > NUM_BUFFER_FRAMES)
+timings[0] += GetCounter();
+StartCounter();
+#endif
+#ifdef TWOPASS_SAMPLING
+m_context->launch( 4, static_cast<unsigned int>(buffer_width), 
+static_cast<unsigned int>(buffer_height));
+#ifdef WINDOWS_TIME
+if(m_frame > NUM_BUFFER_FRAMES)
+timings[5] += GetCounter();
+StartCounter();
+#endif
+
 #endif
 
   /* test code to copy stuff between input output buffers */
@@ -746,6 +777,10 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 	  std::cout << "Filter First Pass: " << (double)timings[2]/(m_frame-NUM_BUFFER_FRAMES) << " ms" << std::endl;
 	  std::cout << "Filter Information Memcpy: " << (double)timings[3]/(m_frame-NUM_BUFFER_FRAMES) << " ms" << std::endl;
 	  std::cout << "Filter Second Pass: " << (double)timings[4]/(m_frame-NUM_BUFFER_FRAMES) << " ms" << std::endl;
+#ifdef TWOPASS_SAMPLING
+	  std::cout << "Sampling Second Pass: " << (double)timings[5]/(m_frame-NUM_BUFFER_FRAMES) << " ms" << std::endl;
+#endif
+
   }
 #endif
 

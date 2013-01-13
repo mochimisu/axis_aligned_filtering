@@ -20,7 +20,18 @@
  */
 
 #include <optixu/optixu_math_namespace.h>
-
+struct PerRayData_direct
+{
+	optix::float3 world_loc;
+	optix::float3 incoming_diffuse_light;
+	optix::float3 incoming_specular_light;
+	optix::float3 norm;
+	optix::float3 Kd;
+	optix::float3 Ks;
+	float phong_exp;
+	float z_dist;
+	bool hit;
+};
 typedef struct {
 	char valid;
 	optix::float3 indirect_diffuse;
