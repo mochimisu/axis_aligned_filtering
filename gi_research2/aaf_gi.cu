@@ -10,7 +10,6 @@
 
 //#define TWOPASS_SAMPLING
 
-#define MAX_FILT_RADIUS 50.f
 #define OHMAX 2.8f
 
 using namespace optix;
@@ -122,6 +121,7 @@ rtDeclareVariable(float, z_threshold, , );
 rtDeclareVariable(float, alpha, ,);
 rtDeclareVariable(float, min_zmin, ,);
 rtDeclareVariable(float, primary_ray_epsilon, ,);
+rtDeclareVariable(float, max_filt_radius, ,);
 
 
 rtDeclareVariable(uint, view_mode, , );
@@ -470,7 +470,7 @@ RT_PROGRAM void sample_aaf_pass2()
 		* tan(vfov/2.f*M_PI/180.f);
 	finfo.proj_dist = proj_dist;
 	//what is this for?
-	//cur_zdist.y = clampVal(2.f*cur_zdist.x/(spp_mu*OHMAX*proj_dist), 1.f, MAX_FILT_RADIUS);
+	//cur_zdist.y = clampVal(2.f*cur_zdist.x/(spp_mu*OHMAX*proj_dist), 1.f, max_filt_radius);
 	float spp_term1 = OHMAX * spp_mu * proj_dist/cur_zdist.x + alpha;
 	float spp_term2 = 1.f+spp_mu*cur_zdist.y/cur_zdist.x;
 	
@@ -501,8 +501,8 @@ RT_PROGRAM void sample_aaf_pass2()
 	
 #ifndef MULTI_BOUNCE	//reduce by 16 to account for first pass
 	spp -= 16;
-	spec_spp -= 16;
 #endif
+	spec_spp -= 16;
 
 
 	float spp_sqrt = sqrt(spp);
@@ -695,7 +695,7 @@ RT_PROGRAM void indirect_filter_first_pass()
 
 	float proj_dist = cur_finfo.proj_dist;
 	int radius = clampVal( 2.f*cur_finfo.zmin
-		/(spp_mu*OHMAX*proj_dist) , 1.f, MAX_FILT_RADIUS);
+		/(spp_mu*OHMAX*proj_dist) , 1.f, max_filt_radius);
   
 
 	if (cur_finfo.valid)
@@ -745,7 +745,7 @@ RT_PROGRAM void indirect_filter_second_pass()
 
 	float proj_dist = cur_finfo.proj_dist;
 	int radius = clampVal( 2.f*cur_finfo.zmin
-		/(spp_mu*OHMAX*proj_dist) , 1.f, MAX_FILT_RADIUS);
+		/(spp_mu*OHMAX*proj_dist) , 1.f, max_filt_radius);
 
 
 	if (cur_finfo.valid)
@@ -800,6 +800,9 @@ RT_PROGRAM void display()
 		indirect_illum_spec[launch_index] * Ks_image[launch_index]
 	  ,1.f);
 
+	  float3 indirect = indirect_illum[launch_index] * Kd_image[launch_index]	 +
+	  indirect_illum_spec[launch_index] * Ks_image[launch_index];
+
 
 	  if (view_mode)
 	  {
@@ -811,8 +814,19 @@ RT_PROGRAM void display()
 			  finfo.indirect_diffuse * Kd_image[launch_index] + 
 			  finfo.indirect_specular * Ks_image[launch_index]
 			  ,1.f);
+
+			  indirect = finfo.indirect_diffuse * Kd_image[launch_index] + 
+			  finfo.indirect_specular * Ks_image[launch_index];
 		  }
-	  }
+	  }	  /*	  const float gamma = 0.455f;
+	  float3 ind_gamma_corrected =
+	  make_float3(pow(indirect.x, gamma),
+	  pow(indirect.y, gamma),
+	  pow(indirect.z, gamma));
+	  
+	  output_buffer[launch_index] = make_float4(ind_gamma_corrected,1.f);
+	  */
+
 	  /*
 	  output_buffer[launch_index] = make_float4(
 		  filter_info_in[launch_index].indirect_specular);
@@ -872,18 +886,31 @@ RT_PROGRAM void display()
 
 
 rtBuffer<filter_info, 2>          filter_info_gt;
-rtDeclareVariable(float, gt_sqrt_samp_pass, ,);
+rtDeclareVariable(uint, gt_samp_pass, ,);
+rtDeclareVariable(uint, gt_tot_samp, ,);
+rtDeclareVariable(uint, gt_tot_samp_sqrt, ,);
+rtDeclareVariable(uint, cur_gt_pass, ,);
 
 RT_PROGRAM void display_gt()
 {	filter_info finfo = filter_info_gt[launch_index];	output_buffer[launch_index] = make_float4(
-		//direct_illum[launch_index] +
+		direct_illum[launch_index] +
 		(finfo.indirect_diffuse * Kd_image[launch_index] + 
 		finfo.indirect_specular * Ks_image[launch_index])/finfo.proj_dist
 	,1.f);
 
+	float3 indirect = (finfo.indirect_diffuse * Kd_image[launch_index] + 
+		finfo.indirect_specular * Ks_image[launch_index])/finfo.proj_dist;
+	const float gamma = 0.455f;
+	float3 ind_gamma_corrected =
+		make_float3(pow(indirect.x, gamma),
+		  pow(indirect.y, gamma),
+		  pow(indirect.z, gamma));
+
+	//output_buffer[launch_index] = make_float4(ind_gamma_corrected,1.f);
+
 	if(view_mode)
 		output_buffer[launch_index] = make_float4(
-		//direct_illum[launch_index] +
+		direct_illum[launch_index] +
 		( 
 		finfo.indirect_specular * Ks_image[launch_index])/finfo.proj_dist
 		,1.f);
@@ -911,7 +938,7 @@ RT_PROGRAM void sample_aaf_gt()
 
 	float2 cur_zdist = make_float2(10000000000.f,scene_epsilon);
 	float cur_depth;
-	if (frame_number == 1)
+	if (cur_gt_pass == 0)
 	{
 		finfo.indirect_diffuse = make_float3(0);
 		finfo.indirect_specular = make_float3(0);
@@ -926,7 +953,7 @@ RT_PROGRAM void sample_aaf_gt()
 		target_spb_spec_theoretical[launch_index] = 0;
 		target_spb_spec[launch_index] = 0;
 		finfo.valid = false;
-		filter_info_out[launch_index] = finfo;
+		filter_info_gt[launch_index] = finfo;
 		return;
 	}
 	direct_illum[launch_index] = dir_samp.incoming_diffuse_light * dir_samp.Kd
@@ -947,9 +974,9 @@ RT_PROGRAM void sample_aaf_gt()
 	float3 normal = dir_samp.norm;
 	float3 prev_dir = normalize(first_hit-eye);
 
-	int num_pass_sqrt = gt_sqrt_samp_pass;
 
-	int initial_bucket_samples = num_pass_sqrt*num_pass_sqrt;
+	int initial_bucket_samples = 
+		min(gt_samp_pass, (int)(gt_tot_samp - finfo.proj_dist));
 
 
 	float3 n_u, n_v, n_w;
@@ -962,10 +989,14 @@ RT_PROGRAM void sample_aaf_gt()
 		float3 sample_dir;
 		float2 rand_samp = make_float2(rnd(seed),rnd(seed));
 		//stratify x,y
-		rand_samp.x = (samp%num_pass_sqrt + rand_samp.x)
-			/num_pass_sqrt;
-		rand_samp.y = (((int)samp/num_pass_sqrt) + rand_samp.y)
-			/num_pass_sqrt;
+		rand_samp.x = (
+			(((int)(samp+finfo.proj_dist))
+			%gt_tot_samp_sqrt) 
+			+ rand_samp.x)
+			/gt_tot_samp_sqrt;
+		rand_samp.y = (((int)(samp+finfo.proj_dist)/gt_tot_samp_sqrt) + rand_samp.y)
+			/gt_tot_samp_sqrt;
+
 
 		//dont accept "grazing" angles
 		//rand_samp.y *= 0.95f;
@@ -982,7 +1013,6 @@ RT_PROGRAM void sample_aaf_gt()
 			cur_zdist.y = max(cur_zdist.y, indir_samp.z_dist);
 
 
-#ifndef MULTI_BOUNCE
 			float3 R = normalize(2*normal*dot(normal, sample_dir)-sample_dir);
 			float nDr = max(dot(-prev_dir, R), 0.f);
 			float3 incoming_light = indir_samp.incoming_specular_light * indir_samp.Ks 
@@ -990,13 +1020,13 @@ RT_PROGRAM void sample_aaf_gt()
 
 			finfo.indirect_diffuse += incoming_light;
 			finfo.indirect_specular += incoming_light*pow(nDr, dir_samp.phong_exp);
-#endif
+
 		}
 	}
 
 	//use proj dist for the sample count
 	finfo.proj_dist += initial_bucket_samples;
-	target_spb[launch_index ] = finfo.proj_dist;
+	target_spb[launch_index] = finfo.proj_dist;
 
 	filter_info_gt[launch_index] = finfo;
 

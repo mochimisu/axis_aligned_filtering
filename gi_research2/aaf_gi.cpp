@@ -21,12 +21,16 @@
 // 8: Cornell box 6  (Simple Glossy)
 // 9: Cornell box 7 (animated 6)  (Simple Glossy)
 // 10: Cornell box 8 (animated 5)  (Comparison Diffuse)
-#define SCENE 8
+// 11: Cornell box 9 (Diffuse: elephant+dragon)
+// 12: Sponza with moving sphere
+#define SCENE 9
 #define COPY_SPECULAR
+
+//#define VIEW_UNFILTERED
 
 //gt: only one bounce for now
 //#define GROUNDTRUTH
-//#define GT_SAMP 4000
+#define GT_SAMP 4000
 
 //number of maximum samples per pixel
 #define MAX_SPP 100
@@ -44,16 +48,17 @@
 //#define WIDTH 1024u
 //#define HEIGHT 1024u
 
-//#define MOVE_GEOMETRY
-//#define MOVE_LIGHT
+#define MOVE_GEOMETRY
+#define MOVE_LIGHT
+//#define MOVE_CAMERA
 
 //timings (on windows only)
 //#define WINDOWS_TIME
 
 //#define TWOPASS_SAMPLING
 
-//#define CAPTURE_FRAMES
-#define NUM_CAPTURE_FRAMES 1000
+#define CAPTURE_FRAMES
+#define NUM_CAPTURE_FRAMES 500
 
 //=== End config
 
@@ -73,6 +78,7 @@
 #include <fstream>
 #include <iomanip>
 #include <ObjLoader.h>
+#include <Mouse.h>
 
 #include "random.h"
 #include "aaf_gi.h"
@@ -161,7 +167,9 @@ private:
   void createSceneCornell6(InitialCameraData& camera_data);
   void createSceneCornell7(InitialCameraData& camera_data);
   void createSceneCornell8(InitialCameraData& camera_data);
+  void createSceneCornell9(InitialCameraData& camera_data);
   void createSceneSponza(InitialCameraData& camera_data);
+  void createSceneSponza2(InitialCameraData& camera_data);
   void createSceneConference(InitialCameraData& camera_data);
   void createSceneSibenik(InitialCameraData& camera_data);
   void sppState( float& average_spp, float& min_spp, float& max_spp,
@@ -213,6 +221,7 @@ private:
   double m_anim_t;
   double m_previous_t;
   Buffer m_light_buffer;
+  int m_gt_num_passes;
 
   Transform m_trans0;
   Transform m_trans1;
@@ -279,8 +288,19 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context->setRayGenerationProgram( 2, ind_filt_second_prog );
   m_context->setRayGenerationProgram( 3, display_prog );
 
-  int sqrt_samp_pass = floor(sqrt((float)MAX_SPP));
-  m_context["gt_sqrt_samp_pass"]->setFloat(sqrt_samp_pass);
+  int gt_samp_pass = MAX_SPP;
+  int gt_t1 = ceil((float)GT_SAMP/MAX_SPP)*MAX_SPP;
+  int gt_samp_sqrt = (int)sqrt((float)gt_t1);
+  int gt_samp_total = gt_samp_sqrt*gt_samp_sqrt;
+  
+  m_gt_num_passes = ceil((float)gt_samp_total/gt_samp_pass);
+
+  m_context["gt_samp_pass"]->setUint(gt_samp_pass);
+  m_context["gt_tot_samp"]->setUint(gt_samp_total);
+  m_context["gt_tot_samp_sqrt"]->setUint(gt_samp_sqrt);
+  std::cout << "GT: " << gt_samp_total << " spp" << std::endl;
+  std::cout << "Per-pass: " << gt_samp_pass << " spp" << std::endl;
+  std::cout << "Passes: " << m_gt_num_passes << std::endl;
 #else
   // AAF programs
   Program sample_prog = m_context->createProgramFromPTXFile(
@@ -398,6 +418,9 @@ void GIScene::initScene( InitialCameraData& camera_data )
 
   //View Mode for displaying different buffers
   m_view_mode = 0;
+#ifdef VIEW_UNFILTERED
+  m_view_mode = 1;
+#endif
   m_context["view_mode"]->setUint(m_view_mode);
 
   //SPP Settings
@@ -421,6 +444,7 @@ void GIScene::initScene( InitialCameraData& camera_data )
   m_context["W"]->setFloat( make_float3( 0.0f, 0.0f, 0.0f ) );
   m_max_heatmap_val = 0;
   m_context["max_heatmap"]->setFloat(0);
+  m_context["max_filt_radius"]->setFloat(50.f);
 
   m_trans0 = m_context->createTransform();
   m_trans1 = m_context->createTransform();
@@ -447,6 +471,10 @@ void GIScene::initScene( InitialCameraData& camera_data )
   createSceneCornell7(camera_data);
 #elif SCENE == 10
   createSceneCornell8(camera_data);
+#elif SCENE == 11
+  createSceneCornell9(camera_data);
+#elif SCENE == 12
+  createSceneSponza2(camera_data);
 #endif
   
 
@@ -694,8 +722,7 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 #if SCENE == 9
   m_trans0->setMatrix(false, Matrix4x4::translate(
 	  make_float3(0,100.f+100.f*cos((float)m_anim_t),0)).getData(), 0);
-#endif
-#if SCENE == 10
+#elif SCENE == 10
   /*
   m_trans0->setMatrix(false, Matrix4x4::translate(
 	  make_float3(0,-0.5f+0.5f*cos((float)m_anim_t),0)).getData(), 0);
@@ -707,8 +734,33 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 	  * Matrix4x4::translate(make_float3(0,-1.f,0));
   m_trans0->setMatrix(false,
 	  transmat.getData(), 0);
+#elif SCENE == 12
+		Matrix4x4 transmat = 
+		Matrix4x4::translate(make_float3(
+		-1000.f-400.f*sin(m_anim_t/2.),0,0));
+
+  m_trans0->setMatrix(false,
+	  transmat.getData(), 0);
 #endif
+
 #endif
+
+#ifdef MOVE_CAMERA
+  //conf
+  float3 eye = make_float3(-550.f, 420.f, -800.f);
+  float3 lookat = make_float3(500.f, 202.f, 451.f);
+  lookat.x = 900.f+200.f*sin(m_anim_t/2.);
+  lookat.z = 500.f+1000.f*cos(m_anim_t/2.);
+  PinholeCamera pc( eye, lookat, make_float3(0,1,0), 35.f, 35.f/(640./480.));
+  float3 u,v,w;
+  pc.getEyeUVW( eye, u, v, w );
+  m_context["eye"]->setFloat( eye );
+  m_context["U"]->setFloat( u );
+  m_context["V"]->setFloat( v );
+  m_context["W"]->setFloat( w );
+#endif
+
+
 
 #ifdef MOVE_LIGHT
   ParallelogramLight* lights = reinterpret_cast<ParallelogramLight*>(
@@ -869,7 +921,38 @@ m_camera_changed = false;
 m_frame = 0;
 }
 
-m_context["frame_number"]->setUint( m_frame++ );
+m_context["frame_number"]->setUint( m_frame++ );
+m_anim_t += 0.03;
+
+#ifdef MOVE_GEOMETRY
+#if SCENE == 9
+m_trans0->setMatrix(false, Matrix4x4::translate(
+make_float3(0,100.f+100.f*cos((float)m_anim_t),0)).getData(), 0);
+#endif
+#if SCENE == 10
+/*
+m_trans0->setMatrix(false, Matrix4x4::translate(
+make_float3(0,-0.5f+0.5f*cos((float)m_anim_t),0)).getData(), 0);
+*/
+Matrix4x4 transmat = 
+Matrix4x4::rotate(
+(float)m_anim_t, make_float3(0,0,1))
+* Matrix4x4::scale(make_float3(0.8))
+* Matrix4x4::translate(make_float3(0,-1.f,0));
+m_trans0->setMatrix(false,
+transmat.getData(), 0);
+#endif
+#endif
+
+#ifdef MOVE_LIGHT
+ParallelogramLight* lights = reinterpret_cast<ParallelogramLight*>(
+m_light_buffer->map());
+float3 d = make_float3(243.f+200.f*sin(
+m_anim_t/1.0),lights[0].corner.y,80.f+200.f*sin(m_anim_t/0.7));
+lights[0].corner = d;
+
+m_light_buffer->unmap();
+#endif
 
 int sqrt_samp_pass = floor(sqrt((float)MAX_SPP));
 
@@ -877,14 +960,41 @@ int sqrt_samp_pass = floor(sqrt((float)MAX_SPP));
 StartCounter();
 #endif
 //direct
-if((m_frame*sqrt_samp_pass) < GT_SAMP)
-m_context->launch( 0, static_cast<unsigned int>(buffer_width), 
-static_cast<unsigned int>(buffer_height));
+for(int i = 0; i < m_gt_num_passes; i++) {
+//if((m_frame*sqrt_samp_pass) < GT_SAMP)
+	m_context["cur_gt_pass"]->setUint(i);
+	m_context->launch( 0, static_cast<unsigned int>(buffer_width), 
+		static_cast<unsigned int>(buffer_height));
+}
 //display
 m_context->launch( 3, static_cast<unsigned int>(buffer_width), 
 static_cast<unsigned int>(buffer_height));
 //std::cout << "frame: " << m_frame << std::endl;
 
+#ifdef CAPTURE_FRAMES
+std::stringstream fname;
+fname << "output_";
+fname << std::setw(7) << std::setfill('0') << output_num;
+fname << ".ppm";
+Buffer output_buf = scene.getOutputBuffer();
+output_num++;
+
+sutilDisplayFilePPM(fname.str().c_str(), output_buf->get());
+m_total_spp += averageSpp();
+
+if (output_num%(NUM_CAPTURE_FRAMES/10) == 0)
+{
+	std::cout << ((float)(output_num)/NUM_CAPTURE_FRAMES)*100.0 << "%" << std::endl;
+	std::cout << "Average SPP: " << 
+		(m_total_spp /(float)output_num) << std::endl;
+}
+if (output_num > NUM_CAPTURE_FRAMES)
+{
+	std::cout << "Average SPP: " << 
+		(m_total_spp /(float)output_num) << std::endl;
+	exit(0);
+}
+#endif
 
 }
 #endif
@@ -1029,9 +1139,11 @@ void GIScene::createSceneSibenik(InitialCameraData& camera_data)
   
   m_context["top_object"]->set( conference_geom_group );
   m_context["top_shadower"]->set( conference_geom_group );
-  m_context["spp_mu"]->setFloat(1.f);
-  m_context["imp_samp_scale_diffuse"]->setFloat(1.f);
-  m_context["imp_samp_scale_specular"]->setFloat(1.f);
+  m_context["spp_mu"]->setFloat(0.9f);
+  m_context["alpha"]->setFloat(0.3f);  m_context["z_threshold"]->setFloat(5.f);
+  m_context["min_zmin"]->setFloat(0.1f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(0.75f);
+  m_context["imp_samp_scale_specular"]->setFloat(0.3f);
 }
 
 void GIScene::createSceneSponza(InitialCameraData& camera_data)
@@ -1087,7 +1199,7 @@ void GIScene::createSceneSponza(InitialCameraData& camera_data)
 
   // Declare these so validation will pass
   m_context["vfov"]->setFloat( vfov );
-  m_context["spp_mu"]->setFloat(.8f);
+  m_context["spp_mu"]->setFloat(.9f);
 
   
   m_context["top_object"]->set( conference_geom_group );
@@ -1098,6 +1210,121 @@ void GIScene::createSceneSponza(InitialCameraData& camera_data)
   m_context["alpha"]->setFloat(0.3f);
   m_context["z_threshold"]->setFloat(10.f);
   m_context["min_zmin"]->setFloat(15.f);
+
+}
+void GIScene::createSceneSponza2(InitialCameraData& camera_data)
+{
+	m_use_textures = true;
+	// Set up camera
+	const float vfov = 45.f;
+	//sponza
+	//
+	camera_data = InitialCameraData( make_float3( 652.5f, 673.5f, -35.f ), // eye
+		make_float3( 614.0f, 660.0f, -35.0f ),    // lookat
+		make_float3( 0.0f, 1.0f,  0.0f ),       // up
+		vfov);                                 // vfov
+
+
+	ParallelogramLight light;
+	light.corner   = make_float3( 380.0f, 700.f, -35.f);
+	light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
+	light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
+	light.normal   = normalize( cross(light.v1, light.v2) );
+	light.emission = make_float3( 15.0f, 15.0f, 5.0f );
+
+	m_light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
+	m_light_buffer->setFormat( RT_FORMAT_USER );
+	m_light_buffer->setElementSize( sizeof( ParallelogramLight ) );
+	m_light_buffer->setSize( 1u );
+	memcpy( m_light_buffer->map(), &light, sizeof( light ) );
+	m_light_buffer->unmap();
+	m_context["lights"]->setBuffer( m_light_buffer ); 
+
+	GeometryGroup conference_geom_group = m_context->createGeometryGroup();
+
+
+	Material diffuse = m_context->createMaterial();
+	Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+		"aaf_gi.cu" ), "shadow" );
+	Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+		"aaf_gi.cu" ), "closest_hit_direct" );
+	diffuse->setClosestHitProgram( 3, diffuse_p );
+	diffuse->setAnyHitProgram( 1, diffuse_ah );
+
+	diffuse["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
+	diffuse["Ks"]->setFloat( 0.f, 0.f, 0.f );
+	diffuse["phong_exp"]->setFloat( 1.f );
+	diffuse["obj_id"]->setInt(10);
+
+	std::string objpath = std::string( sutilSamplesDir() ) + 
+		"/gi_research2/data/crytek_sponza/sponza_noflag.obj";
+	ObjLoader * conference_loader = new ObjLoader( objpath.c_str(), 
+		m_context, conference_geom_group, diffuse, true );
+	conference_loader->load();
+
+	std::vector<GeometryInstance> gi_sph;
+
+	std::string sphere_ptx( ptxpath("aaf_gi", "sphere.cu") );
+	m_pgram_sph_bounding_box = 
+		m_context->createProgramFromPTXFile(sphere_ptx, "bounds");
+	m_pgram_sph_intersection = 
+		m_context->createProgramFromPTXFile(sphere_ptx, "intersect");
+
+	Material sph_diffuse = m_context->createMaterial();
+	Program sph_diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+		"aaf_gi.cu" ), "shadow" );
+		sph_diffuse->setAnyHitProgram( 1, sph_diffuse_ah );	Program sph_diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+		"aaf_gi.cu" ), "closest_hit_direct" );
+	sph_diffuse->setClosestHitProgram( 3, sph_diffuse_p );
+
+	sph_diffuse["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
+	make_float3( 0.f ) ) );
+	sph_diffuse["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
+	make_float3( 1.f ) ) );
+	sph_diffuse["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
+	make_float3( 0.0f ) ) );
+	sph_diffuse["Kd"]->setFloat(0.);
+	sph_diffuse["Ks"]->setFloat(0.);
+	sph_diffuse["phong_exp"]->setFloat(12.f);
+	/*
+	gi_sph.push_back(
+	createSphere(make_float3(614,350,100),50));
+	setMaterial(gi_sph.back(), sph_diffuse, "Kd", make_float3(1,1,1));
+	gi_sph.push_back(
+	createSphere(make_float3(614,350,-150),50));
+	setMaterial(gi_sph.back(), sph_diffuse, "Kd", make_float3(1,1,1));
+	*/
+	gi_sph.push_back(
+	createSphere(make_float3(614,350,-35),175));
+	setMaterial(gi_sph.back(), sph_diffuse, "Kd", make_float3(1,1,1));
+
+
+	GeometryGroup sph_geo_group = m_context->createGeometryGroup(gi_sph.begin(), 
+		gi_sph.end());
+	sph_geo_group->setAcceleration(m_context->createAcceleration("Lbvh", "Bvh"));
+
+	m_trans0 = m_context->createTransform();
+	m_trans0->setMatrix(false, Matrix4x4::identity().getData(), 0);
+	m_trans0->setChild(sph_geo_group);
+
+	Group top_group = m_context->createGroup();
+	top_group->setAcceleration(
+		m_context->createAcceleration("NoAccel", "NoAccel"));
+	top_group->setChildCount(2);
+	top_group->setChild(0, conference_geom_group);
+	top_group->setChild(1, m_trans0);
+
+	// Declare these so validation will pass
+	m_context["vfov"]->setFloat( vfov );
+	m_context["spp_mu"]->setFloat(.9f);
+
+	m_context["top_object"]->set( top_group );
+	m_context["imp_samp_scale_diffuse"]->setFloat(.3f);
+	m_context["imp_samp_scale_specular"]->setFloat(0.f);
+
+	m_context["alpha"]->setFloat(0.9f);
+	m_context["z_threshold"]->setFloat(5.f);
+	m_context["min_zmin"]->setFloat(15.f);
 
 }
 
@@ -1154,13 +1381,14 @@ void GIScene::createSceneConference(InitialCameraData& camera_data)
   
   m_context["top_object"]->set( conference_geom_group );
   m_context["top_shadower"]->set( conference_geom_group );
-  m_context["spp_mu"]->setFloat(0.8f);
+  m_context["spp_mu"]->setFloat(0.9f);
   m_context["imp_samp_scale_diffuse"]->setFloat(.3f);
   m_context["imp_samp_scale_specular"]->setFloat(0.f);
 
   m_context["alpha"]->setFloat(0.3f);
   m_context["z_threshold"]->setFloat(5.f);
-  m_context["min_zmin"]->setFloat(20.f);
+  m_context["min_zmin"]->setFloat(15.f);
+  m_context["max_filt_radius"]->setFloat(30.f);
 }
 
 void GIScene::createSceneCornell(InitialCameraData& camera_data)
@@ -1538,6 +1766,170 @@ void GIScene::createSceneCornell3(InitialCameraData& camera_data)
   m_context["min_zmin"]->setFloat(0.08f);
 }
 
+void GIScene::createSceneCornell9(InitialCameraData& camera_data)
+{
+	  m_use_textures = false;
+  // Set up camera
+  const float vfov = 35.f;
+
+  camera_data = InitialCameraData( 
+      make_float3( 278.0f, 500.0f, -700.0f ), // eye
+      make_float3( 278.0f, 273.0f, 0.0f ),    // lookat
+      make_float3( 0.0f, 1.0f,  0.0f ),       // up
+      35.0f );         // vfov
+
+
+
+  // Light buffer
+  ParallelogramLight light;
+  light.corner   = make_float3( 343.0f, 548.6f, 227.0f);
+  light.v1       = make_float3( -130.0f, 0.0f, 0.0f);
+  light.v2       = make_float3( 0.0f, 0.0f, 105.0f);
+  light.normal   = normalize( cross(light.v1, light.v2) );
+  light.emission = make_float3( 15.0f, 15.0f, 5.0f );
+
+  Buffer light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
+  light_buffer->setFormat( RT_FORMAT_USER );
+  light_buffer->setElementSize( sizeof( ParallelogramLight ) );
+  light_buffer->setSize( 1u );
+  memcpy( light_buffer->map(), &light, sizeof( light ) );
+  light_buffer->unmap();
+  m_context["lights"]->setBuffer( light_buffer );
+  // Set up material
+  Material diffuse = m_context->createMaterial();
+  Material diffuse2 = m_context->createMaterial();
+  Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+        "aaf_gi.cu" ), "shadow" );
+  Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+        "aaf_gi.cu" ), "closest_hit_direct" );
+  diffuse->setClosestHitProgram( 3, diffuse_p );
+  diffuse->setAnyHitProgram( 1, diffuse_ah );
+  diffuse2->setClosestHitProgram( 3, diffuse_p );
+  diffuse2->setAnyHitProgram( 1, diffuse_ah );
+  
+  //dummy texture maps
+  diffuse["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.2f, 0.2f, 0.2f ) ) );
+  diffuse["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.8f, 0.8f, 0.8f ) ) );
+  diffuse["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.0f, 0.0f, 0.0f ) ) );
+  diffuse["Kd"]->setFloat(0.1,0.5,0.6);
+  diffuse["Ks"]->setFloat(0.,0.,0.);
+  diffuse["phong_exp"]->setFloat(1.);
+  diffuse2["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.0f, 0.0f, 0.0f ) ) );
+  diffuse2["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.0f, 0.0f, 0.0f ) ) );
+  diffuse2["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
+        make_float3( 0.0f, 0.0f, 0.0f ) ) );
+
+  diffuse2["Kd"]->setFloat(0.5,0.5,0.5);
+  diffuse2["Ks"]->setFloat(0.0,0.0,0.0);
+  diffuse2["phong_exp"]->setFloat(10.);
+
+  // Set up parallelogram programs
+  std::string ptx_path = ptxpath( "aaf_gi", "parallelogram.cu" );
+  m_pgram_bounding_box = m_context->createProgramFromPTXFile( ptx_path, 
+      "bounds" );
+  m_pgram_intersection = m_context->createProgramFromPTXFile( ptx_path, 
+      "intersect" );
+
+  // create geometry instances
+  std::vector<GeometryInstance> gis;
+
+  const float3 white = make_float3( 0.7f, 0.7f, 0.7f );
+  const float3 green = make_float3( 0.1f, 0.7f, 0.1f );
+  const float3 red   = make_float3( 0.7f, 0.1f, 0.1f );
+  const float3 light_em = make_float3( 15.0f, 15.0f, 15.0f );
+
+  // Floor
+  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ),
+                                      make_float3( 556.0f, 0.0f, 0.0f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Ceiling
+  gis.push_back( createParallelogram( make_float3( 0.0f, 548.8f, 0.0f ),
+                                      make_float3( 556.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Back wall
+  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 559.2f),
+                                      make_float3( 0.0f, 548.8f, 0.0f),
+                                      make_float3( 556.0f, 0.0f, 0.0f) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Right wall
+  gis.push_back( createParallelogram( make_float3( 0.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 548.8f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", green);
+
+  // Left wall
+  gis.push_back( createParallelogram( make_float3( 556.0f, 0.0f, 0.0f ),
+                                      make_float3( 0.0f, 0.0f, 559.2f ),
+                                      make_float3( 0.0f, 548.8f, 0.0f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", red);
+
+  //Pedestal
+  // Top
+  /*
+  gis.push_back( createParallelogram( make_float3( 256.0f, 150.0f, 256.0f ),
+                                      make_float3( 300.0f, 0.0f, 0.f ),
+                                      make_float3( 0.0f, 0.f, 300.0f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+   // Side
+  //gis.push_back( createParallelogram( make_float3( 556.0f, 0.0f, 556.0f ),
+   //                                   make_float3( 0.0f, 150.0f, 0.f ),
+    //                                  make_float3( 0.0f, 0.f, -300.0f ) ) );
+  //setMaterial(gis.back(), diffuse, "Kd", white);
+
+  // Front
+  gis.push_back( createParallelogram( make_float3( 256.0f, 0.0f, 256.0f ),
+                                      make_float3( 0.0f, 150.0f, 0.f ),
+                                      make_float3( 300.0f, 0.f, 0.0f ) ) );
+  setMaterial(gis.back(), diffuse, "Kd", white);
+
+  */
+
+  GeometryGroup geom_group = m_context->createGeometryGroup(gis.begin(), 
+      gis.end());
+
+ Matrix4x4 dragon_xform = Matrix4x4::translate(make_float3(370,0,270)) 
+    * Matrix4x4::rotate(M_PI + M_PI/3,make_float3(0,1,0))
+	* Matrix4x4::scale(make_float3(28,28,28));
+    
+  std::string objpath = std::string( sutilSamplesDir() ) +
+    "/gi_research2/data/dragon.obj";
+  ObjLoader * dragon_loader = new ObjLoader( objpath.c_str(), m_context, 
+      geom_group, diffuse, true );
+  dragon_loader->load(dragon_xform);
+
+  Matrix4x4 elephant_xform = Matrix4x4::translate(make_float3(150,0,270))	
+    * Matrix4x4::rotate(M_PI-M_PI/8,make_float3(0,-1,0))
+    * Matrix4x4::scale(make_float3(0.35,0.35,0.35));
+    
+  objpath = std::string( sutilSamplesDir() ) + 
+    "/gi_research2/data/elephant.obj";
+  ObjLoader * elephant_loader = new ObjLoader( objpath.c_str(), m_context, 
+      geom_group, diffuse2, true );
+  elephant_loader->load(elephant_xform);
+
+   // Declare these so validation will pass
+  m_context["vfov"]->setFloat( vfov );
+  m_context["top_object"]->set( geom_group );
+  m_context["spp_mu"]->setFloat(1.f);
+  m_context["imp_samp_scale_diffuse"]->setFloat(0.5f);
+  m_context["imp_samp_scale_specular"]->setFloat(0.f);
+
+  m_context["alpha"]->setFloat(0.5f);
+  m_context["z_threshold"]->setFloat(10.f);
+  m_context["min_zmin"]->setFloat(15.f);
+
+}
+
 void GIScene::createSceneCornell4(InitialCameraData& camera_data)
 {
 
@@ -1787,13 +2179,13 @@ void GIScene::createSceneCornell5(InitialCameraData& camera_data)
 	m_context["top_object"]->set( geom_group );
 	m_context["top_shadower"]->set( geom_group );
 
-	m_context["spp_mu"]->setFloat(0.8f);
+	m_context["spp_mu"]->setFloat(1.f);
 	m_context["imp_samp_scale_diffuse"]->setFloat(.4f);
 	m_context["imp_samp_scale_specular"]->setFloat(0.f);
 	
 	m_context["alpha"]->setFloat(0.4f);
 	m_context["z_threshold"]->setFloat(5.f);
-	m_context["min_zmin"]->setFloat(0.08f);
+	m_context["min_zmin"]->setFloat(0.06f);
 
 	m_context["primary_ray_epsilon"]->setFloat(3.3f);
 
@@ -2192,9 +2584,9 @@ void GIScene::createSceneCornell8(InitialCameraData& camera_data)
 	m_context["imp_samp_scale_diffuse"]->setFloat(.4f);
 	m_context["imp_samp_scale_specular"]->setFloat(0.f);
 
-	m_context["alpha"]->setFloat(0.4f);
-	m_context["z_threshold"]->setFloat(5.f);
-	m_context["min_zmin"]->setFloat(0.08f);
+	m_context["alpha"]->setFloat(0.5f);
+	m_context["z_threshold"]->setFloat(2.f);
+	m_context["min_zmin"]->setFloat(0.0f);
 
 	m_context["primary_ray_epsilon"]->setFloat(3.3f);
 
