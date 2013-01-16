@@ -23,14 +23,16 @@
 // 10: Cornell box 8 (animated 5)  (Comparison Diffuse)
 // 11: Cornell box 9 (Diffuse: elephant+dragon)
 // 12: Sponza with moving sphere
-#define SCENE 9
+// 13: Sibenik (animated)
+#define SCENE 5
 #define COPY_SPECULAR
+#define USE_FILTER
 
 //#define VIEW_UNFILTERED
 
 //gt: only one bounce for now
 //#define GROUNDTRUTH
-#define GT_SAMP 4000
+#define GT_SAMP 420
 
 //number of maximum samples per pixel
 #define MAX_SPP 100
@@ -48,8 +50,8 @@
 //#define WIDTH 1024u
 //#define HEIGHT 1024u
 
-#define MOVE_GEOMETRY
-#define MOVE_LIGHT
+//#define MOVE_GEOMETRY
+//#define MOVE_LIGHT
 //#define MOVE_CAMERA
 
 //timings (on windows only)
@@ -57,8 +59,8 @@
 
 //#define TWOPASS_SAMPLING
 
-#define CAPTURE_FRAMES
-#define NUM_CAPTURE_FRAMES 500
+//#define CAPTURE_FRAMES
+#define NUM_CAPTURE_FRAMES 1000
 
 //=== End config
 
@@ -172,6 +174,7 @@ private:
   void createSceneSponza2(InitialCameraData& camera_data);
   void createSceneConference(InitialCameraData& camera_data);
   void createSceneSibenik(InitialCameraData& camera_data);
+  void createSceneSibenik2(InitialCameraData& camera_data);
   void sppState( float& average_spp, float& min_spp, float& max_spp,
   float& average_spp_theoretical, float& min_spp_theoretical,
   float& max_spp_theoretical);
@@ -475,6 +478,8 @@ void GIScene::initScene( InitialCameraData& camera_data )
   createSceneCornell9(camera_data);
 #elif SCENE == 12
   createSceneSponza2(camera_data);
+#elif SCENE == 13
+  createSceneSibenik2(camera_data);
 #endif
   
 
@@ -742,6 +747,14 @@ void GIScene::trace( const RayGenCameraData& camera_data )
   m_trans0->setMatrix(false,
 	  transmat.getData(), 0);
 #endif
+#if SCENE == 13
+
+  Matrix4x4 transmat = 
+	  Matrix4x4::translate(make_float3(2.f,-3.f+5.f*sin(m_anim_t),3.f*cos(m_anim_t)));
+
+  m_trans0->setMatrix(false,
+	  transmat.getData(), 0);
+#endif
 
 #endif
 
@@ -763,6 +776,7 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 
 
 #ifdef MOVE_LIGHT
+#if SCENE == 9
   ParallelogramLight* lights = reinterpret_cast<ParallelogramLight*>(
 	  m_light_buffer->map());
   float3 d = make_float3(243.f+200.f*sin(
@@ -770,6 +784,15 @@ void GIScene::trace( const RayGenCameraData& camera_data )
   lights[0].corner = d;
 
   m_light_buffer->unmap();
+#endif
+#if SCENE == 5 || SCENE == 13
+  ParallelogramLight* lights = reinterpret_cast<ParallelogramLight*>(
+	  m_light_buffer->map());
+  float3 d = make_float3(2.f,-8.f+6.f*sin(m_anim_t),0.f);
+  lights[0].corner = d;
+
+  m_light_buffer->unmap();
+#endif
 #endif
 
 #ifdef WINDOWS_TIME
@@ -793,6 +816,7 @@ StartCounter();
 #endif
 
 #endif
+#ifdef USE_FILTER
 
   /* test code to copy stuff between input output buffers */
   //TODO: cudaMemcpyPeer
@@ -854,6 +878,9 @@ StartCounter();
   if(m_frame > NUM_BUFFER_FRAMES)
 	  timings[4] += GetCounter();
 #endif
+
+#endif
+
   //display
   m_context->launch( 3, static_cast<unsigned int>(buffer_width), 
 	  static_cast<unsigned int>(buffer_height));
@@ -1085,8 +1112,67 @@ void GIScene::setMaterial( GeometryInstance& gi,
   gi[color_name]->setFloat(color);
 }
 
-
 void GIScene::createSceneSibenik(InitialCameraData& camera_data)
+{
+//Sibenik
+m_use_textures = true;
+// Set up camera
+const float vfov = 60.f;
+//conference
+camera_data = InitialCameraData( make_float3( -8.0f, -10.f, 0.f ), // eye
+make_float3( 9.0f, -13.f, 0.0f ),    // lookat
+make_float3( 0.0f, 1.0f,  0.0f ),       // up
+vfov);                                 // vfov
+
+
+ParallelogramLight light;
+light.corner   = make_float3( 2.0f, -4.f, 0.f);
+light.v1       = make_float3( -1.0f, 0.0f, 0.0f);
+light.v2       = make_float3( 0.0f, 0.0f, 1.0f);
+light.normal   = normalize( cross(light.v1, light.v2) );
+light.emission = make_float3( 15.0f, 15.0f, 5.0f );
+
+m_light_buffer = m_context->createBuffer( RT_BUFFER_INPUT );
+m_light_buffer->setFormat( RT_FORMAT_USER );
+m_light_buffer->setElementSize( sizeof( ParallelogramLight ) );
+m_light_buffer->setSize( 1u );
+memcpy( m_light_buffer->map(), &light, sizeof( light ) );
+m_light_buffer->unmap();
+m_context["lights"]->setBuffer( m_light_buffer ); 
+
+GeometryGroup conference_geom_group = m_context->createGeometryGroup();
+
+
+Material diffuse = m_context->createMaterial();
+Program diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+"aaf_gi.cu" ), "shadow" );
+Program diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+"aaf_gi.cu" ), "closest_hit_direct" );
+diffuse->setClosestHitProgram( 3, diffuse_p );
+diffuse->setAnyHitProgram( 1, diffuse_ah );
+
+diffuse["Kd"]->setFloat( 0.87402f, 0.87402f, 0.87402f );
+diffuse["Ks"]->setFloat( 0.f, 0.f, 0.f );
+diffuse["phong_exp"]->setFloat( 1.f );
+
+std::string objpath = std::string( sutilSamplesDir() ) + 
+"/gi_research2/data/sibenik/sibenik.obj";
+ObjLoader * conference_loader = new ObjLoader( objpath.c_str(), 
+m_context, conference_geom_group, diffuse, true );
+conference_loader->load();
+
+m_context["vfov"]->setFloat( vfov );
+
+m_context["top_object"]->set( conference_geom_group );
+m_context["top_shadower"]->set( conference_geom_group );
+m_context["spp_mu"]->setFloat(0.9f);
+m_context["alpha"]->setFloat(0.3f);m_context["z_threshold"]->setFloat(5.f);
+m_context["min_zmin"]->setFloat(0.1f);
+m_context["imp_samp_scale_diffuse"]->setFloat(0.75f);
+m_context["imp_samp_scale_specular"]->setFloat(0.3f);
+}
+
+void GIScene::createSceneSibenik2(InitialCameraData& camera_data)
 {
 	//Sibenik
   m_use_textures = true;
@@ -1133,12 +1219,57 @@ void GIScene::createSceneSibenik(InitialCameraData& camera_data)
     "/gi_research2/data/sibenik/sibenik.obj";
   ObjLoader * conference_loader = new ObjLoader( objpath.c_str(), 
       m_context, conference_geom_group, diffuse, true );
-  conference_loader->load();
+  conference_loader->load();
+  std::vector<GeometryInstance> gi_sph;
+  
+  std::string sphere_ptx( ptxpath("aaf_gi", "sphere.cu") );
+  m_pgram_sph_bounding_box = 
+  m_context->createProgramFromPTXFile(sphere_ptx, "bounds");
+  m_pgram_sph_intersection = 
+  m_context->createProgramFromPTXFile(sphere_ptx, "intersect");
+  
+  Material sph_diffuse = m_context->createMaterial();
+  Program sph_diffuse_ah = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+  "aaf_gi.cu" ), "shadow" );
+  sph_diffuse->setAnyHitProgram( 1, sph_diffuse_ah );  Program sph_diffuse_p = m_context->createProgramFromPTXFile( ptxpath( "aaf_gi", 
+  "aaf_gi.cu" ), "closest_hit_direct" );
+  sph_diffuse->setClosestHitProgram( 3, sph_diffuse_p );
+  
+  sph_diffuse["ambient_map"]->setTextureSampler( loadTexture( m_context, "", 
+  make_float3( 0.f ) ) );
+  sph_diffuse["diffuse_map"]->setTextureSampler( loadTexture( m_context, "", 
+  make_float3( 1.f ) ) );
+  sph_diffuse["specular_map"]->setTextureSampler( loadTexture( m_context, "", 
+  make_float3( 1.f ) ) );
+  sph_diffuse["Kd"]->setFloat(0.);
+  sph_diffuse["Ks"]->setFloat(0.);
+  sph_diffuse["phong_exp"]->setFloat(12.f);
+  gi_sph.push_back(
+	  createSphere(make_float3(0,0,0),0.5));
+	  setMaterial(gi_sph.back(), sph_diffuse, "Kd", make_float3(1,1,1));
+  gi_sph.push_back(
+	  createSphere(make_float3(9.f,-12.f,0.25),0.5));
+  setMaterial(gi_sph.back(), sph_diffuse, "Kd", make_float3(1,1,1));
+  
+  
+  GeometryGroup sph_geo_group = m_context->createGeometryGroup(gi_sph.begin(), 
+  gi_sph.end());
+  sph_geo_group->setAcceleration(m_context->createAcceleration("Lbvh", "Bvh"));
+  
+  m_trans0 = m_context->createTransform();
+  m_trans0->setMatrix(false, Matrix4x4::identity().getData(), 0);
+  m_trans0->setChild(sph_geo_group);
+  
+  Group top_group = m_context->createGroup();
+  top_group->setAcceleration(
+  m_context->createAcceleration("NoAccel", "NoAccel"));
+  top_group->setChildCount(2);
+  top_group->setChild(0, conference_geom_group);
+  top_group->setChild(1, m_trans0);
 
   m_context["vfov"]->setFloat( vfov );
   
-  m_context["top_object"]->set( conference_geom_group );
-  m_context["top_shadower"]->set( conference_geom_group );
+  m_context["top_object"]->set( top_group );
   m_context["spp_mu"]->setFloat(0.9f);
   m_context["alpha"]->setFloat(0.3f);  m_context["z_threshold"]->setFloat(5.f);
   m_context["min_zmin"]->setFloat(0.1f);
@@ -1316,13 +1447,13 @@ void GIScene::createSceneSponza2(InitialCameraData& camera_data)
 
 	// Declare these so validation will pass
 	m_context["vfov"]->setFloat( vfov );
-	m_context["spp_mu"]->setFloat(.9f);
+	m_context["spp_mu"]->setFloat(.8f);
 
 	m_context["top_object"]->set( top_group );
 	m_context["imp_samp_scale_diffuse"]->setFloat(.3f);
 	m_context["imp_samp_scale_specular"]->setFloat(0.f);
 
-	m_context["alpha"]->setFloat(0.9f);
+	m_context["alpha"]->setFloat(0.6f);
 	m_context["z_threshold"]->setFloat(5.f);
 	m_context["min_zmin"]->setFloat(15.f);
 

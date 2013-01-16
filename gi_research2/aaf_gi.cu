@@ -906,7 +906,7 @@ RT_PROGRAM void display_gt()
 		  pow(indirect.y, gamma),
 		  pow(indirect.z, gamma));
 
-	//output_buffer[launch_index] = make_float4(ind_gamma_corrected,1.f);
+	output_buffer[launch_index] = make_float4(ind_gamma_corrected,1.f);
 
 	if(view_mode)
 		output_buffer[launch_index] = make_float4(
