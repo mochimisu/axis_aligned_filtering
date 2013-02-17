@@ -735,6 +735,7 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 	  static_cast<unsigned int>(buffer_height));
   //std::cout << "frame: " << m_frame << std::endl;
 
+#ifdef WINDOWS_TIME
   if (m_frame > NUM_FRAMES_TIME)
   {
 	  std::cout << "Direct sampling: " << (double)timings[0]/(m_frame-10) << " ms" << std::endl;
@@ -742,6 +743,7 @@ void GIScene::trace( const RayGenCameraData& camera_data )
 	  std::cout << "Indirect sampling: " << (double)timings[2]/(m_frame-10) << " ms" << std::endl;
 	  std::cout << "Filtering: " << (double)timings[3]/(m_frame-10) << " ms" << std::endl;
   }
+#endif
 
 }
 #else
