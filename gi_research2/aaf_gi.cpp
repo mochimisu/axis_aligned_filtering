@@ -40,7 +40,7 @@
 //#define HEIGHT 512u
 //#define WIDTH 1024u
 //#define HEIGHT 1024u
-#define WINDOWS_TIME
+//#define WINDOWS_TIME
 
 //=== End config
 
